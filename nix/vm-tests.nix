@@ -105,20 +105,26 @@ let
 in
 {
   # Every scenario of fixtures/delivery/ (ADR 0012), then metrics and status.
+  # Counters live in process memory and reset on restart, so the metrics are scraped after the
+  # scenarios without a restart step, before the ones that restart the store.
   vm-delivery = mkTest "delivery" 400 ''
-    with subtest("delivery scenarios"):
-        print(machine.succeed("${pusher} ${fixtures}/delivery/*.json"))
-
-    common_checks()
+    with subtest("delivery scenarios without a restart"):
+        print(machine.succeed("${pusher} $(grep -L '\"restart\"' ${fixtures}/delivery/*.json)"))
 
     with subtest("metrics on loopback, in the convention"):
         m = machine.succeed("curl -sS http://127.0.0.1:9474/metrics")
+        # auth: 2x401, disk-full: 1x507, gap: 1 seq gap (fixtures/delivery/).
         for want in ['nisshi_records_total{source_node="node-a"} ', "nisshi_seq_gaps_total 1\n",
                      'nisshi_push_requests_total{code="507"} 1\n', 'nisshi_push_requests_total{code="401"} 2\n',
                      "nisshi_disk_free_bytes ", 'nisshi_build_info{version="${nisshi.version}"} 1\n']:
             assert want in m, f"missing {want!r} in\n{m}"
         bad = [l for l in m.splitlines() if l and not l.startswith("#") and not l.startswith("nisshi_")]
         assert not bad, bad
+
+    with subtest("delivery scenarios with a restart"):
+        print(machine.succeed("${pusher} $(grep -l '\"restart\"' ${fixtures}/delivery/*.json)"))
+
+    common_checks()
 
     with subtest("status for the reader token only"):
         s = status()
