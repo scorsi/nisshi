@@ -5,7 +5,8 @@
 
 *日誌 (nisshi): the logbook, written day after day and never rewritten.*
 
-**Status:** M0 (log schema, `nisshi validate --logs`, fixtures); the store itself is M1.
+**Status:** M1 (store: `nisshi serve`, `read`, `verify`, NixOS module `services.nisshi`);
+mTLS is M2.
 
 ## Role
 
@@ -54,3 +55,12 @@ agent's spool state (`paused`, oldest unacked record).
 
 Nix flake, NixOS module, `nixosTest`. Docs in English. Public repository: no host names,
 domains or addresses of any deployment.
+
+## Testing
+
+`nix flake check` runs the Go tests, the fixtures and the module evaluation everywhere; the
+nixosTests (`checks.<linux-system>.vm-delivery`, `vm-fixtures`, `vm-seal`) need a Linux
+builder. They drive `nisshi.service` with `nisshi-testpush` (`cmd/nisshi-testpush`, test-only,
+not shipped) over `fixtures/delivery/` and `fixtures/logs/records.ndjson`. The environment
+variable `NISSHI_FAKE_NOW` (RFC 3339) freezes the store's clock, for the seal and retention
+tests only: `recv_ts`, the receive day, `sealed_at` and the retention cut-off all follow it.

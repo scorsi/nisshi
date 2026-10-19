@@ -153,3 +153,5 @@ in
       builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath
     );
 }
+# The VM tests of nix/vm-tests.nix need a Linux builder; the orchestrator runs them.
+// lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (import ./vm-tests.nix self { inherit pkgs; })
