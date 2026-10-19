@@ -75,6 +75,7 @@ no fixture line in `fixtures/logs/`:
 
 | Level | Check | Reason |
 |---|---|---|
+| request, 400 without `record_index` | the body decodes (zstd, then `PushRequest`) | `body-format` |
 | request, 400 without `record_index` | the request's `node` is the authenticated node | `node-mismatch` |
 | request, 400 without `record_index` | `stream_id` is 16 bytes (the 32 hex chars of `stream`) | `stream-id-format` |
 | request, 400 without `record_index` | `first_seq` is not 0 | `first-seq-zero` |
@@ -82,8 +83,9 @@ no fixture line in `fixtures/logs/`:
 | record, 400 with `record_index` | the record's `stream` is the request's `stream_id` in hex | `stream-mismatch` |
 | record, 400 with `record_index` | the record's `seq` is `first_seq` + its index | `seq-mismatch` |
 
-A record is first checked against the rules above, then against the request: the first
-failure of the first invalid record is the reason.
+The request checks run in table order before any record. A record is first checked against
+the rules above, then against the request: the first failure of the first invalid record is
+the reason.
 
 ## Wrapped lines
 

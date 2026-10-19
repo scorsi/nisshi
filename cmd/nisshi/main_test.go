@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -21,11 +22,11 @@ func TestValidateLogs(t *testing.T) {
 		{"line over the scanner buffer", ok + "\n" + big + "\n" + ok + "\n", 1, "line 2: line-too-large\n"},
 	} {
 		var stderr bytes.Buffer
-		if code := run([]string{"validate", "--logs"}, strings.NewReader(tc.in), &stderr); code != tc.code || stderr.String() != tc.stderr {
+		if code := run([]string{"validate", "--logs"}, strings.NewReader(tc.in), io.Discard, &stderr); code != tc.code || stderr.String() != tc.stderr {
 			t.Errorf("%s: got %d %q, want %d %q", tc.name, code, stderr.String(), tc.code, tc.stderr)
 		}
 	}
-	if code := run([]string{"validate"}, strings.NewReader(""), &bytes.Buffer{}); code != 2 {
+	if code := run([]string{"validate"}, strings.NewReader(""), io.Discard, &bytes.Buffer{}); code != 2 {
 		t.Errorf("usage error: got %d, want 2", code)
 	}
 }
