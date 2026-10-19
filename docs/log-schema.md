@@ -41,6 +41,29 @@ Reserved: all of the above, and any name starting with `_`. A service line carry
 field is invalid (the agent wraps it as `unparsed`); a pushed record carrying `recv_ts` is
 refused.
 
+## Validation and reasons
+
+`nisshi validate --logs` checks service lines; the store checks pushed records with the same
+code (ADR 0003). The checks run in this order and the first failure is the reason, the exact
+string of `PushRejected.reason` and of an `unparsed` record's `reason`:
+
+| # | Check | Reason |
+|---|---|---|
+| 1 | size: a service line over 1 MiB, a record over 4 MiB | `line-too-long`, `record-too-long` |
+| 2 | UTF-8 | `not-utf8` |
+| 3 | records only: no `\n` byte (JSON allows one between tokens, the store keeps one record per line) | `embedded-newline` |
+| 4 | exactly one JSON object, surrounding whitespace allowed | `not-object` |
+| 5 | no member name twice at the top level (first repeated name, after unescaping) | `duplicate-field:<name>` |
+| 6 | no reserved name, first one in document order: in a service line the agent's and the store's fields and `_*`; in a record `recv_ts` and `_*` | `reserved-field:<name>` |
+| 7 | fields in this order: `v`, `ts`, `level`, `event`, `msg`, `err`, then for records `node`, `service`, `stream`, `seq`, `source` | `missing-field:<name>` when required and absent, `<name>-format` when present and wrong |
+
+Field formats: `v` is the literal `1` (not `1.0`, not `"1"`); `ts` as above and a real UTC date
+and time; `level` one of the four strings; `event` matches `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`;
+`msg`, `err` strings; `node` as above; `service` a non-empty string; `stream` 32 lowercase hex
+chars; `seq` an integer from 1 to 2^64-1 written in plain digits; `source` `journald` or `file`.
+Nested objects and service fields are not checked. `err` outside `warn`/`error` is a convention,
+not a rule. Fixture format: [fixtures/logs/README.md](../fixtures/logs/README.md).
+
 ## Wrapped lines
 
 Third-party units (sshd, forgejo, systemd) and house lines that fail to parse:

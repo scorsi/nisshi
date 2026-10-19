@@ -5,7 +5,7 @@
 
 *日誌 (nisshi): the logbook, written day after day and never rewritten.*
 
-**Status:** designed (ADRs 2026-10-19), no code yet.
+**Status:** M0 (log schema, `nisshi validate --logs`, fixtures); the store itself is M1.
 
 ## Role
 

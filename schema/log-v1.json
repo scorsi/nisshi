@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/scorsi/nisshi/schema/log-v1.json",
+  "title": "nisshi log schema v1",
+  "description": "Envelope of docs/log-schema.md. The root validates a line written by a service; $defs/record a record as pushed by an agent; $defs/stored a record as stored. Not expressible here, checked by nisshi validate and defined by fixtures/logs/: sizes (1 MiB line, 4 MiB record), UTF-8, one line, duplicate members, v written as the literal 1, ts being a real date, and the order that picks the reason. Service fields (flat snake_case) are free.",
+  "$ref": "#/$defs/serviceLine",
+  "$defs": {
+    "ts": {
+      "description": "UTC, RFC 3339, exactly 9 fractional digits, Z suffix",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$"
+    },
+    "serviceFields": {
+      "type": "object",
+      "required": ["v", "ts", "level", "event"],
+      "properties": {
+        "v": { "const": 1 },
+        "ts": { "$ref": "#/$defs/ts" },
+        "level": { "enum": ["debug", "info", "warn", "error"] },
+        "event": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+        "msg": { "type": "string" },
+        "err": { "type": "string" }
+      }
+    },
+    "agentFields": {
+      "type": "object",
+      "required": ["node", "service", "stream", "seq"],
+      "properties": {
+        "node": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+        "service": { "type": "string", "minLength": 1 },
+        "stream": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+        "seq": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+        "source": { "enum": ["journald", "file"] }
+      }
+    },
+    "serviceLine": {
+      "allOf": [{ "$ref": "#/$defs/serviceFields" }],
+      "propertyNames": {
+        "not": {
+          "anyOf": [
+            { "enum": ["node", "service", "stream", "seq", "source", "recv_ts"] },
+            { "pattern": "^_" }
+          ]
+        }
+      }
+    },
+    "record": {
+      "description": "A record as pushed (PushRequest.records): the service's envelope and the agent's.",
+      "allOf": [{ "$ref": "#/$defs/serviceFields" }, { "$ref": "#/$defs/agentFields" }],
+      "propertyNames": { "not": { "anyOf": [{ "const": "recv_ts" }, { "pattern": "^_" }] } }
+    },
+    "stored": {
+      "description": "A record as stored: as pushed, with recv_ts appended as the last member.",
+      "allOf": [{ "$ref": "#/$defs/serviceFields" }, { "$ref": "#/$defs/agentFields" }],
+      "required": ["recv_ts"],
+      "properties": { "recv_ts": { "$ref": "#/$defs/ts" } },
+      "propertyNames": { "not": { "pattern": "^_" } }
+    }
+  }
+}

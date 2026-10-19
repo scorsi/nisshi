@@ -1,0 +1,51 @@
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"proto\":\"udp\",\"client\":\"203.0.113.9\",\"qname\":\"example.org.\",\"qtype\":\"SOA\",\"rcode\":\"NOERROR\",\"aa\":true,\"cache\":\"none\",\"size\":112,\"dur_us\":38}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.910331870Z\",\"level\":\"info\",\"event\":\"query\",\"proto\":\"udp\",\"client\":\"192.0.2.1\",\"qname\":\"forgejo.org.\",\"qtype\":\"AAAA\",\"rcode\":\"NOERROR\",\"aa\":false,\"cache\":\"hit\",\"size\":96,\"dur_us\":11}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:05.000118034Z\",\"level\":\"warn\",\"event\":\"upstream-timeout\",\"upstream\":\"9.9.9.9:53\",\"qname\":\"example.net.\",\"qtype\":\"A\"}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:15:12.774019220Z\",\"level\":\"info\",\"event\":\"update\",\"key\":\"hanko\",\"owner\":\"_acme-challenge.git.example.org.\",\"op\":\"add\",\"records\":1}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:20:41.003991512Z\",\"level\":\"info\",\"event\":\"request\",\"listener\":\"edge\",\"route\":\"forgejo\",\"client\":\"192.0.2.1\",\"method\":\"GET\",\"host\":\"git.example.org\",\"path\":\"/owner/repo\",\"proto\":\"HTTP/2.0\",\"tls\":\"1.3\",\"status\":200,\"bytes\":51231,\"dur_us\":1830}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:20:44.120004091Z\",\"level\":\"warn\",\"event\":\"upstream-error\",\"listener\":\"edge\",\"route\":\"forgejo\",\"err\":\"dial tcp 127.0.0.1:3000: connection refused\"}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:30:00.410020931Z\",\"level\":\"info\",\"event\":\"handshake-completed\",\"peer\":\"node-b\",\"endpoint\":\"198.51.100.20:4802\",\"initiator\":true}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:31:12.000913112Z\",\"level\":\"info\",\"event\":\"path-change\",\"peer\":\"node-b\",\"from\":\"relayed\",\"to\":\"direct\",\"reason\":\"hole-punch-succeeded\"}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"error\",\"event\":\"upstream-error\",\"msg\":\"résumé ✓ 日誌\",\"err\":\"dial tcp 192.0.2.1:53: i/o timeout\"}","valid":true,"reason":""}
+{"input":"{\"event\":\"query\",\"level\":\"debug\",\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"v\":1,\"nested\":{\"node\":\"x\",\"_a\":1,\"ts\":2}}","valid":true,"reason":""}
+{"input":"  {\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"warn\",\"event\":\"query2\"}  ","valid":true,"reason":""}
+{"input_repeat":{"prefix":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"big\",\"pad\":\"","repeat":"x","count":1048493,"suffix":"\"}"},"valid":true,"reason":""}
+{"input":"{\"v\":1,\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"missing-field:ts"}
+{"input":"{\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"missing-field:v"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"event\":\"query\"}","valid":false,"reason":"missing-field:level"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\"}","valid":false,"reason":"missing-field:event"}
+{"input":"{\"v\":2,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"v-format"}
+{"input":"{\"v\":\"1\",\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"v-format"}
+{"input":"{\"v\":1.0,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"v-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T10:14:03.512004117+02:00\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-13-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":1792397643512004117,\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"warning\",\"event\":\"query\"}","valid":false,"reason":"level-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"INFO\",\"event\":\"query\"}","valid":false,"reason":"level-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"Upstream_Timeout\"}","valid":false,"reason":"event-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"\"}","valid":false,"reason":"event-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"msg\":42}","valid":false,"reason":"msg-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"error\",\"event\":\"query\",\"err\":null}","valid":false,"reason":"err-format"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"node\":\"node-a\"}","valid":false,"reason":"reserved-field:node"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"service\":\"annai\"}","valid":false,"reason":"reserved-field:service"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"stream\":\"9b1e0c5d7a2f4e8b9c0d1e2f3a4b5c6d\"}","valid":false,"reason":"reserved-field:stream"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"seq\":1}","valid":false,"reason":"reserved-field:seq"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"source\":\"journald\"}","valid":false,"reason":"reserved-field:source"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"recv_ts\":\"2026-10-19T08:14:03.512004117Z\"}","valid":false,"reason":"reserved-field:recv_ts"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"_cursor\":\"s=1\"}","valid":false,"reason":"reserved-field:_cursor"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"\\u006eode\":\"node-a\"}","valid":false,"reason":"reserved-field:node"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"ts\":\"2026-10-19T08:14:03.512004117Z\"}","valid":false,"reason":"duplicate-field:ts"}
+{"input_repeat":{"prefix":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"big\",\"pad\":\"","repeat":"x","count":1048494,"suffix":"\"}"},"valid":false,"reason":"line-too-long"}
+{"input":"","valid":false,"reason":"not-object"}
+{"input":"level=info event=query qname=example.org.","valid":false,"reason":"not-object"}
+{"input":"[{\"v\":1}]","valid":false,"reason":"not-object"}
+{"input":"\"text\"","valid":false,"reason":"not-object"}
+{"input":"null","valid":false,"reason":"not-object"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"","valid":false,"reason":"not-object"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"} {}","valid":false,"reason":"not-object"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",}","valid":false,"reason":"not-object"}
+{"input_b64":"eyJ2IjoxLCJ0cyI6IjIwMjYtMTAtMTlUMDg6MTQ6MDMuNTEyMDA0MTE3WiIsImxldmVsIjoiaW5mbyIsImV2ZW50IjoicXVlcnkiLCJtc2ciOiL//iJ9","valid":false,"reason":"not-utf8"}
+{"input_b64":"eyJ2IjoxLCJ0cyI6IjIwMjYtMTAtMTlUMDg6MTQ6MDMuNTEyMDA0MTE3WiIsImxldmVsIjoiaW5mbyIsImV2ZW50IjoicXVlcnkiLCJtc2ciOiLDKCJ9","valid":false,"reason":"not-utf8"}
