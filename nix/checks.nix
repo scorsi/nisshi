@@ -118,7 +118,7 @@ in
         touch $out
       '';
 
-  # M0 module: evaluates in a NixOS system (aarch64-linux when this system is Darwin).
+  # The module evaluates in a NixOS system (aarch64-linux when this system is Darwin).
   module =
     let
       nixos = lib.nixosSystem {
@@ -133,12 +133,22 @@ in
               fsType = "tmpfs";
             };
             system.stateVersion = "26.05";
-            services.nisshi.enable = true;
+            services.nisshi = {
+              enable = true;
+              listen = [ "[::1]:9473" ];
+              tls = {
+                certFile = "/var/lib/hanko/nisshi/fullchain.pem";
+                keyFile = "/var/lib/hanko/nisshi/key.pem";
+              };
+              tokens.${builtins.hashString "sha256" "example"} = "node:node-a";
+              retentionDays = null;
+            };
           }
         ];
       };
     in
     assert lib.any (p: lib.getName p == "nisshi") nixos.config.environment.systemPackages;
+    assert nixos.config.systemd.services.nisshi.serviceConfig.Type == "notify";
     pkgs.writeText "nisshi-module-eval" (
       builtins.unsafeDiscardStringContext nixos.config.system.build.toplevel.drvPath
     );
