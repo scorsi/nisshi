@@ -21,10 +21,31 @@ const (
 )
 
 // Line checks one line written by a service, without its newline. It returns "" when valid.
-func Line(b []byte) string { return check(b, false) }
+func Line(b []byte) string { _, reason := check(b, false); return reason }
 
 // Record checks one record as pushed by an agent. It returns "" when valid.
-func Record(b []byte) string { return check(b, true) }
+func Record(b []byte) string { _, reason := RecordFields(b); return reason }
+
+// Fields are the envelope members the store needs from a valid record.
+type Fields struct {
+	Ts, Node, Service, Stream string
+	Seq                       uint64
+}
+
+// RecordFields checks one pushed record and returns its envelope fields; reason is "" when valid.
+func RecordFields(b []byte) (Fields, string) {
+	obj, reason := check(b, true)
+	if reason != "" {
+		return Fields{}, reason
+	}
+	var f Fields
+	f.Ts, _ = str(obj["ts"])
+	f.Node, _ = str(obj["node"])
+	f.Service, _ = str(obj["service"])
+	f.Stream, _ = str(obj["stream"])
+	f.Seq, _ = strconv.ParseUint(string(obj["seq"]), 10, 64)
+	return f, ""
+}
 
 var (
 	tsRe     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z$`)
@@ -71,30 +92,30 @@ var agentFields = []field{
 	{"source", false, oneOf("journald", "file")},
 }
 
-func check(b []byte, record bool) string {
+func check(b []byte, record bool) (map[string][]byte, string) {
 	if record && len(b) > MaxRecordBytes {
-		return "record-too-large"
+		return nil, "record-too-large"
 	}
 	if !record && len(b) > MaxLineBytes {
-		return "line-too-large"
+		return nil, "line-too-large"
 	}
 	if !utf8.Valid(b) {
-		return "not-utf8" // encoding/json would silently replace the bytes with U+FFFD
+		return nil, "not-utf8" // encoding/json would silently replace the bytes with U+FFFD
 	}
 	// The store inserts recv_ts before the last byte and keeps one record per line on disk.
 	if record && (len(b) < 2 || b[0] != '{' || b[len(b)-1] != '}' || bytes.ContainsAny(b, "\r\n")) {
-		return "framing"
+		return nil, "framing"
 	}
 	if !json.Valid(b) {
-		return "not-json"
+		return nil, "not-json"
 	}
 	obj, order, reason := parseObject(b)
 	if reason != "" {
-		return reason
+		return nil, reason
 	}
 	for _, k := range order {
 		if k == "recv_ts" || strings.HasPrefix(k, "_") || (!record && slices.ContainsFunc(agentFields, func(f field) bool { return f.name == k })) {
-			return "reserved-field:" + k
+			return nil, "reserved-field:" + k
 		}
 	}
 	fields := serviceFields
@@ -105,15 +126,15 @@ func check(b []byte, record bool) string {
 		raw, ok := obj[f.name]
 		if !ok {
 			if f.required {
-				return "missing-field:" + f.name
+				return nil, "missing-field:" + f.name
 			}
 			continue
 		}
 		if !f.ok(raw) || f.name == "err" && !oneOf("warn", "error")(obj["level"]) {
-			return f.name + "-format"
+			return nil, f.name + "-format"
 		}
 	}
-	return ""
+	return obj, ""
 }
 
 // parseObject returns the top-level members of a single JSON value known to be valid, keys in

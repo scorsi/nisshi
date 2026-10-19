@@ -1,7 +1,10 @@
 { lib, buildGoModule }:
-buildGoModule {
+buildGoModule (finalAttrs: {
   pname = "nisshi";
   version = "0.1.0-dev";
+
+  # cmd/nisshi-testpush is test-only (ADR 0011): nix/vm-tests.nix builds it with subPackages.
+  subPackages = [ "cmd/nisshi" ];
 
   # Only what the Go build and its tests read.
   src = lib.fileset.toSource {
@@ -16,12 +19,13 @@ buildGoModule {
   };
 
   # Changes whenever go.sum does: set to lib.fakeHash and read the new value from the build error.
-  vendorHash = "sha256-aF4c3loEsXDF8dQt9b6bZ9JV4nTjVfKsU0Jyb/lq63M=";
+  vendorHash = "sha256-bKtIfjtfZ8OnzM7uaOPMZe4r0sj3ma0sucvGNlLEqzc=";
 
   env.CGO_ENABLED = 0;
   ldflags = [
     "-s"
     "-w"
+    "-X nisshi/internal/serve.Version=${finalAttrs.version}"
   ];
 
   # `nix flake check` runs this phase: vet first, then the default `go test ./...`.
@@ -34,4 +38,4 @@ buildGoModule {
     homepage = "https://github.com/scorsi/nisshi";
     mainProgram = "nisshi";
   };
-}
+})
