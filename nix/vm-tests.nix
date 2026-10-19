@@ -35,7 +35,8 @@ let
       imports = [ self.nixosModules.default ];
 
       # A small filesystem so the disk-full scenario can fill it (disk_reserve 8 MiB).
-      fileSystems.${root} = {
+      # virtualisation.fileSystems: qemu-vm replaces plain fileSystems with mkVMOverride.
+      virtualisation.fileSystems.${root} = {
         device = "tmpfs";
         fsType = "tmpfs";
         options = [

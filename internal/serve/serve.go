@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -85,6 +86,18 @@ func NewLogger(w io.Writer) *slog.Logger {
 	return slog.New(h).With("v", 1)
 }
 
+// logWriter turns each line of a stdlib logger into a schema line.
+type logWriter struct{ log *slog.Logger }
+
+func (w logWriter) Write(p []byte) (int, error) {
+	w.log.Warn("", "event", "http-error", "err", strings.TrimSpace(string(p)))
+	return len(p), nil
+}
+
+// errorLog is http.Server.ErrorLog: net/http otherwise writes plain text (TLS handshake errors,
+// handler panics) to stderr, outside the log schema.
+func errorLog(l *slog.Logger) *log.Logger { return log.New(logWriter{l}, "", 0) }
+
 // Run serves until SIGTERM or SIGINT. It notifies systemd when the listeners are bound.
 func Run(cfg Config, log *slog.Logger) error {
 	now, err := Clock()
@@ -101,7 +114,7 @@ func Run(cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: s.handler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: s.handler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog(log)}
 	var servers []*http.Server
 	var listeners []net.Listener
 	for _, addr := range cfg.Listen {
@@ -118,7 +131,7 @@ func Run(cfg Config, log *slog.Logger) error {
 		}
 		mm := http.NewServeMux()
 		mm.HandleFunc("GET /metrics", s.serveMetrics)
-		msrv := &http.Server{Handler: mm, ReadHeaderTimeout: 10 * time.Second}
+		msrv := &http.Server{Handler: mm, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog(log)}
 		servers = append(servers, msrv)
 		go msrv.Serve(ln)
 	}

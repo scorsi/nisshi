@@ -30,12 +30,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case len(args) == 2 && args[0] == "validate" && args[1] == "--logs":
 		return validate(stdin, stderr)
 	case len(args) == 2 && args[0] == "serve":
+		// The service's stderr is its journal: even a fatal error is a schema line.
+		log := serve.NewLogger(stderr)
 		cfg, err := serve.LoadConfig(args[1])
-		if err != nil {
-			return fail(err)
+		if err == nil {
+			err = serve.Run(cfg, log)
 		}
-		if err := serve.Run(cfg, serve.NewLogger(stderr)); err != nil {
-			return fail(err)
+		if err != nil {
+			log.Error("", "event", "exit", "err", err.Error())
+			return 1
 		}
 		return 0
 	case len(args) == 2 && args[0] == "verify":

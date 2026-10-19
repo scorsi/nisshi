@@ -270,3 +270,30 @@ func TestNotify(t *testing.T) {
 		t.Errorf("without NOTIFY_SOCKET: %v", err)
 	}
 }
+
+type chanWriter chan []byte
+
+func (c chanWriter) Write(p []byte) (int, error) { c <- bytes.Clone(p); return len(p), nil }
+
+// A TLS handshake error (a port probe that closes at once) is a schema line, not net/http text.
+func TestErrorLogIsSchema(t *testing.T) {
+	lines := make(chanWriter, 4)
+	ts := httptest.NewUnstartedServer(http.NotFoundHandler())
+	ts.Config.ErrorLog = errorLog(NewLogger(lines))
+	ts.StartTLS()
+	defer ts.Close()
+	c, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	select {
+	case line := <-lines:
+		line = bytes.TrimSuffix(line, []byte("\n"))
+		if reason := logschema.Line(line); reason != "" || !bytes.Contains(line, []byte(`"event":"http-error","err":"http: TLS handshake error`)) {
+			t.Errorf("%s: %s", reason, line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no log line")
+	}
+}
