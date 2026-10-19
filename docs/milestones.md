@@ -15,8 +15,8 @@ and the services) is in the deployment repository.
   an agent field written by a service, `recv_ts` present, a line over 1 MiB, not an object,
   invalid UTF-8; and every example of log-schema.md as valid), `fixtures/delivery/` with the
   initial scenario set of delivery-scenarios.md.
-- Flake outputs: `packages.nisshi`, `lib.validateLogs` (path of the binary for other repos'
-  tests), `lib.fixtures` (path of `fixtures/`), `nixosModules.default`.
+- Flake outputs: `packages.nisshi`, `lib.validateLogs.<system>` (path of the binary for other
+  repos' tests), `lib.fixtures` (path of `fixtures/`), `nixosModules.default`.
 - **Done when**: `nix flake check` green on darwin and Linux; `nisshi validate --logs` gives the
   expected verdict and reason on every fixture line. This unblocks the services'
   instrumentation, hikyaku's validator and masu's scenario tests.

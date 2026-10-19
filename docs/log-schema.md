@@ -18,7 +18,7 @@ added here without a fixture is not a rule.
 | `level` | string | yes | `debug`, `info`, `warn`, `error` |
 | `event` | string | yes | kebab-case name of what happened (`query`, `request`, `upstream-timeout`) |
 | `msg` | string | no | free text for humans; never parsed |
-| `err` | string | no | error text, with `warn` or `error` |
+| `err` | string | no | error text; only when `level` is `warn` or `error` |
 
 ## Envelope added by the agent
 
@@ -51,20 +51,39 @@ string of `PushRejected.reason` and of an `unparsed` record's `reason`:
 
 | # | Check | Reason |
 |---|---|---|
-| 1 | size: a service line over 1 MiB, a pushed record over 4 194 261 bytes (4 MiB stored, less the 43-byte `recv_ts` member) | `line-too-long`, `record-too-long` |
+| 1 | size: a service line over 1 MiB, a pushed record over 4 194 261 bytes (4 MiB stored, less the 43-byte `recv_ts` member) | `line-too-large`, `record-too-large` |
 | 2 | UTF-8 | `not-utf8` |
-| 3 | records only: no `\n` byte (JSON allows one between tokens, the store keeps one record per line) | `embedded-newline` |
-| 4 | exactly one JSON object, surrounding whitespace allowed | `not-object` |
-| 5 | no member name twice at the top level (first repeated name, after unescaping) | `duplicate-field:<name>` |
-| 6 | no reserved name, first one in document order: in a service line the agent's and the store's fields and `_*`; in a record `recv_ts` and `_*` | `reserved-field:<name>` |
-| 7 | fields in this order: `v`, `ts`, `level`, `event`, `msg`, `err`, then for records `node`, `service`, `stream`, `seq`, `source` | `missing-field:<name>` when required and absent, `<name>-format` when present and wrong |
+| 3 | records only: the bytes start with `{`, end with `}` (no surrounding whitespace: the store inserts `recv_ts` before the last byte) and hold no CR or LF byte (the store keeps one record per line). A service line may have surrounding whitespace | `framing` |
+| 4 | exactly one JSON value | `not-json` |
+| 5 | that value is an object | `not-object` |
+| 6 | no member name twice at the top level (first repeated name, after unescaping) | `duplicate-field:<name>` |
+| 7 | no reserved name, first one in document order: in a service line the agent's and the store's fields and `_*`; in a record `recv_ts` and `_*` | `reserved-field:<name>` |
+| 8 | fields in this order: `v`, `ts`, `level`, `event`, `msg`, `err`, then for records `node`, `service`, `stream`, `seq`, `source` | `missing-field:<name>` when required and absent, `<name>-format` when present and wrong |
 
 Field formats: `v` is the literal `1` (not `1.0`, not `"1"`); `ts` as above and a real UTC date
 and time; `level` one of the four strings; `event` matches `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`;
-`msg`, `err` strings; `node` as above; `service` a non-empty string; `stream` 32 lowercase hex
-chars; `seq` an integer from 1 to 2^64-1 written in plain digits; `source` `journald` or `file`.
-Nested objects and service fields are not checked. `err` outside `warn`/`error` is a convention,
-not a rule. Fixture format: [fixtures/logs/README.md](../fixtures/logs/README.md).
+`msg` a string; `err` a string, and only when `level` is `warn` or `error` (else `err-format`);
+`node` as above; `service` a non-empty string; `stream` 32 lowercase hex chars; `seq` an
+integer from 1 to 2^64-1 written in plain digits; `source` `journald` or `file`. Nested objects
+and service fields are not checked. Fixture format: [fixtures/logs/README.md](../fixtures/logs/README.md).
+
+### Ingestion reasons (M1)
+
+`POST /v1/push` (ADR 0003) also refuses a request whose envelope does not match the request
+itself. These reasons come from the store only, never from `nisshi validate --logs`, and have
+no fixture line in `fixtures/logs/`:
+
+| Level | Check | Reason |
+|---|---|---|
+| request, 400 without `record_index` | the request's `node` is the authenticated node | `node-mismatch` |
+| request, 400 without `record_index` | `stream_id` is 16 bytes (the 32 hex chars of `stream`) | `stream-id-format` |
+| request, 400 without `record_index` | `first_seq` is not 0 | `first-seq-zero` |
+| record, 400 with `record_index` | the record's `node` is the request's `node` | `node-mismatch` |
+| record, 400 with `record_index` | the record's `stream` is the request's `stream_id` in hex | `stream-mismatch` |
+| record, 400 with `record_index` | the record's `seq` is `first_seq` + its index | `seq-mismatch` |
+
+A record is first checked against the rules above, then against the request: the first
+failure of the first invalid record is the reason.
 
 ## Wrapped lines
 

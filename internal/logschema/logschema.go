@@ -54,7 +54,7 @@ var serviceFields = []field{
 	{"level", true, oneOf("debug", "info", "warn", "error")},
 	{"event", true, matches(eventRe)},
 	{"msg", false, isString},
-	{"err", false, isString},
+	{"err", false, isString}, // and only with warn or error: checked in check
 }
 
 var agentFields = []field{
@@ -73,16 +73,20 @@ var agentFields = []field{
 
 func check(b []byte, record bool) string {
 	if record && len(b) > MaxRecordBytes {
-		return "record-too-long"
+		return "record-too-large"
 	}
 	if !record && len(b) > MaxLineBytes {
-		return "line-too-long"
+		return "line-too-large"
 	}
 	if !utf8.Valid(b) {
 		return "not-utf8" // encoding/json would silently replace the bytes with U+FFFD
 	}
-	if record && bytes.IndexByte(b, '\n') >= 0 {
-		return "embedded-newline" // JSON whitespace, but one record is one line on disk
+	// The store inserts recv_ts before the last byte and keeps one record per line on disk.
+	if record && (len(b) < 2 || b[0] != '{' || b[len(b)-1] != '}' || bytes.ContainsAny(b, "\r\n")) {
+		return "framing"
+	}
+	if !json.Valid(b) {
+		return "not-json"
 	}
 	obj, order, reason := parseObject(b)
 	if reason != "" {
@@ -105,14 +109,15 @@ func check(b []byte, record bool) string {
 			}
 			continue
 		}
-		if !f.ok(raw) {
+		if !f.ok(raw) || f.name == "err" && !oneOf("warn", "error")(obj["level"]) {
 			return f.name + "-format"
 		}
 	}
 	return ""
 }
 
-// parseObject returns the top-level members of a single JSON object, keys in document order.
+// parseObject returns the top-level members of a single JSON value known to be valid, keys in
+// document order, or "not-object".
 func parseObject(b []byte) (map[string][]byte, []string, string) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
@@ -123,12 +128,12 @@ func parseObject(b []byte) (map[string][]byte, []string, string) {
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
-			return nil, nil, "not-object"
+			return nil, nil, "not-json"
 		}
 		k := t.(string) // inside an object, the decoder only yields string keys
 		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
-			return nil, nil, "not-object"
+			return nil, nil, "not-json"
 		}
 		if _, dup := obj[k]; dup {
 			return nil, nil, "duplicate-field:" + k // parsers disagree on which value wins
@@ -137,10 +142,10 @@ func parseObject(b []byte) (map[string][]byte, []string, string) {
 		order = append(order, k)
 	}
 	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
-		return nil, nil, "not-object"
+		return nil, nil, "not-json"
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return nil, nil, "not-object" // trailing data after the object
+		return nil, nil, "not-json"
 	}
 	return obj, order, ""
 }

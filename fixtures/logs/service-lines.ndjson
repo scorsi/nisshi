@@ -38,14 +38,15 @@
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"_cursor\":\"s=1\"}","valid":false,"reason":"reserved-field:_cursor"}
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"\\u006eode\":\"node-a\"}","valid":false,"reason":"reserved-field:node"}
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"ts\":\"2026-10-19T08:14:03.512004117Z\"}","valid":false,"reason":"duplicate-field:ts"}
-{"input_repeat":{"prefix":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"big\",\"pad\":\"","repeat":"x","count":1048494,"suffix":"\"}"},"valid":false,"reason":"line-too-long"}
-{"input":"","valid":false,"reason":"not-object"}
-{"input":"level=info event=query qname=example.org.","valid":false,"reason":"not-object"}
+{"input_repeat":{"prefix":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"big\",\"pad\":\"","repeat":"x","count":1048494,"suffix":"\"}"},"valid":false,"reason":"line-too-large"}
+{"input":"","valid":false,"reason":"not-json"}
+{"input":"level=info event=query qname=example.org.","valid":false,"reason":"not-json"}
 {"input":"[{\"v\":1}]","valid":false,"reason":"not-object"}
 {"input":"\"text\"","valid":false,"reason":"not-object"}
 {"input":"null","valid":false,"reason":"not-object"}
-{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"","valid":false,"reason":"not-object"}
-{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"} {}","valid":false,"reason":"not-object"}
-{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",}","valid":false,"reason":"not-object"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"","valid":false,"reason":"not-json"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"} {}","valid":false,"reason":"not-json"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",}","valid":false,"reason":"not-json"}
 {"input_b64":"eyJ2IjoxLCJ0cyI6IjIwMjYtMTAtMTlUMDg6MTQ6MDMuNTEyMDA0MTE3WiIsImxldmVsIjoiaW5mbyIsImV2ZW50IjoicXVlcnkiLCJtc2ciOiL//iJ9","valid":false,"reason":"not-utf8"}
 {"input_b64":"eyJ2IjoxLCJ0cyI6IjIwMjYtMTAtMTlUMDg6MTQ6MDMuNTEyMDA0MTE3WiIsImxldmVsIjoiaW5mbyIsImV2ZW50IjoicXVlcnkiLCJtc2ciOiLDKCJ9","valid":false,"reason":"not-utf8"}
+{"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\",\"err\":\"connection refused\"}","valid":false,"reason":"err-format"}

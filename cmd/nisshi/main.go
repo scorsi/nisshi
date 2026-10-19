@@ -32,7 +32,7 @@ func run(args []string, stdin io.Reader, stderr io.Writer) int {
 		}
 	}
 	if err := sc.Err(); errors.Is(err, bufio.ErrTooLong) {
-		fmt.Fprintf(stderr, "line %d: line-too-long\n", n+1)
+		fmt.Fprintf(stderr, "line %d: line-too-large\n", n+1)
 		return 1
 	} else if err != nil {
 		fmt.Fprintf(stderr, "nisshi: reading stdin: %v\n", err)

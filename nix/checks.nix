@@ -39,14 +39,11 @@ in
         touch $out
       '';
 
-  # The real binary, `nisshi validate --logs`, on every service-line fixture: verdict and reason.
+  # The real binary, through lib.validateLogs, `nisshi validate --logs` on every service-line fixture: verdict and reason.
   fixtures-cli =
     pkgs.runCommand "nisshi-fixtures-cli"
       {
-        nativeBuildInputs = [
-          nisshi
-          pkgs.jq
-        ];
+        nativeBuildInputs = [ pkgs.jq ];
       }
       ''
         n=0
@@ -59,7 +56,9 @@ in
             jq -j 'if has("input") then .input else .input_repeat | .prefix + (.repeat * .count) + .suffix end' <<<"$fx" >in
           fi
           echo >>in # a line as journalctl -o cat prints it
-          if nisshi validate --logs <in 2>err; then got=""; else got=$(sed -n 's/^line 1: //p' err); fi
+          if ${
+            self.lib.validateLogs.${pkgs.stdenv.hostPlatform.system}
+          } validate --logs <in 2>err; then got=""; else got=$(sed -n 's/^line 1: //p' err); fi
           [ "$got" = "$want" ] || { echo "service-lines.ndjson:$n: got '$got', want '$want'"; cat err; exit 1; }
         done <${fixtures}/logs/service-lines.ndjson
         echo "$n service-line fixtures checked"
@@ -67,7 +66,7 @@ in
       '';
 
   # Valid fixtures satisfy schema/log-v1.json; invalid ones whose rule the schema can express
-  # (missing or reserved field) do not.
+  # (missing or reserved field, err outside warn/error) do not.
   schema =
     pkgs.runCommand "nisshi-schema"
       {
@@ -88,7 +87,7 @@ in
                 if fx["valid"]:
                     errs = list(v.iter_errors(json.loads(fx["input"])))
                     assert not errs, f"{name}:{i}: valid fixture rejected by the schema: {errs[0].message}"
-                elif fx["reason"].startswith(("missing-field:", "reserved-field:")):
+                elif fx["reason"].startswith(("missing-field:", "reserved-field:", "err-format")):
                     assert not v.is_valid(json.loads(fx["input"])), f"{name}:{i}: schema accepts {fx['reason']}"
         EOF
         touch $out

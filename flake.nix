@@ -28,9 +28,9 @@
 
       flake = {
         lib = {
-          # Path of the nisshi binary, for other repositories' tests (ADR 0004):
-          # `journalctl -u <unit> -o cat | ${nisshi.lib.validateLogs pkgs} validate --logs`.
-          validateLogs = pkgs: "${self.packages.${pkgs.stdenv.hostPlatform.system}.nisshi}/bin/nisshi";
+          # Path of the nisshi binary per system, for other repositories' tests (ADR 0004):
+          # `journalctl -u <unit> -o cat | ${inputs.nisshi.lib.validateLogs.${pkgs.stdenv.hostPlatform.system}} validate --logs`.
+          validateLogs = builtins.mapAttrs (_: p: "${p.nisshi}/bin/nisshi") self.packages;
           # fixtures/logs (ADR 0004) and fixtures/delivery (ADR 0012).
           fixtures = ./fixtures;
         };
