@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/scorsi/nisshi/schema/log-v1.json",
   "title": "nisshi log schema v1",
-  "description": "Envelope of docs/log-schema.md. The root validates a line written by a service; $defs/record a record as pushed by an agent; $defs/stored a record as stored. Not expressible here, checked by nisshi validate and defined by fixtures/logs/: sizes (1 MiB line, 4 MiB record), UTF-8, one line, duplicate members, v written as the literal 1, ts being a real date, and the order that picks the reason. Service fields (flat snake_case) are free.",
+  "description": "Envelope of docs/log-schema.md. The root validates a line written by a service; $defs/record a record as pushed by an agent; $defs/stored a record as stored. Not expressible here, checked by nisshi validate and defined by fixtures/logs/: sizes (1 MiB line, 4 194 261-byte pushed record: 4 MiB stored, less the 43-byte recv_ts member), UTF-8, one line, duplicate members, v written as the literal 1, ts being a real date, and the order that picks the reason. Service fields (flat snake_case) are free.",
   "$ref": "#/$defs/serviceLine",
   "$defs": {
     "ts": {

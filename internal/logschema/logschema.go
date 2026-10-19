@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	MaxLineBytes   = 1 << 20 // a service line
-	MaxRecordBytes = 4 << 20 // a stored record, envelope included
+	MaxLineBytes   = 1 << 20    // a service line
+	MaxRecordBytes = 4<<20 - 43 // a pushed record: stored, with the 43-byte `,"recv_ts":"…"` member, at most 4 MiB
 )
 
 // Line checks one line written by a service, without its newline. It returns "" when valid.

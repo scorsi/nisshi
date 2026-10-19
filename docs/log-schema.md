@@ -1,7 +1,9 @@
 # Log schema v1
 
 One log record = one JSON object on one line (UTF-8, no embedded newline). A service line is
-at most 1 MiB; a stored record (envelope and `raw_b64` included) at most 4 MiB. ADR 0004.
+at most 1 MiB; a stored record (envelope and `raw_b64` included) at most 4 MiB (4 194 304
+bytes). The store inserts `,"recv_ts":"<ts>"` before the final `}`, always 43 bytes (`ts`
+format), so a pushed record is at most 4 194 261 bytes. ADR 0004.
 
 **The rules are the fixtures.** This document describes them; `fixtures/logs/` in this
 repository is their executable definition, run by nisshi and by hikyaku (ADR 0004). A rule
@@ -49,7 +51,7 @@ string of `PushRejected.reason` and of an `unparsed` record's `reason`:
 
 | # | Check | Reason |
 |---|---|---|
-| 1 | size: a service line over 1 MiB, a record over 4 MiB | `line-too-long`, `record-too-long` |
+| 1 | size: a service line over 1 MiB, a pushed record over 4 194 261 bytes (4 MiB stored, less the 43-byte `recv_ts` member) | `line-too-long`, `record-too-long` |
 | 2 | UTF-8 | `not-utf8` |
 | 3 | records only: no `\n` byte (JSON allows one between tokens, the store keeps one record per line) | `embedded-newline` |
 | 4 | exactly one JSON object, surrounding whitespace allowed | `not-object` |
