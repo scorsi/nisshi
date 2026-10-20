@@ -17,3 +17,4 @@ Decision / Consequences. A decision is changed by a new ADR that supersedes the 
 | [0010](0010-read-and-status.md) | Reading and status |
 | [0011](0011-testing.md) | Testing |
 | [0012](0012-delivery-scenarios.md) | Delivery scenarios as shared data |
+| [0013](0013-forbidden-for-wrong-role.md) | 403 for a valid token of the wrong role |

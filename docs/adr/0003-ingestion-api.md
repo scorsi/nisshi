@@ -1,6 +1,7 @@
 # ADR 0003 — Ingestion API and delivery semantics
 
 Status: Accepted — 2026-10-19
+Superseded in part by [0013](0013-forbidden-for-wrong-role.md) (403 for a valid token of the wrong role).
 
 ## Context
 
