@@ -118,7 +118,13 @@ validation would refuse.
 | hikyaku | `journal-gap` | `from_ts`, `to_ts` |
 | hikyaku | `file-truncated` | `path` |
 | hikyaku | `rejected` (`level:"error"`, replaces a record the store refused, same `seq`) | `err` (store's reason), `raw_b64` (the refused record's bytes), `service` and `ts` of the refused record when readable, else `hikyaku` and the agent's time |
+| hikyaku | `record-rejected` (`level:"error"`) | `signal`, `rejected_seq`, `reason` |
+| hikyaku | `replacement-rejected` (`level:"error"`, the store refused the replacement too; the stream stops) | `signal`, `rejected_seq`, `err` (store's reason) |
+| hikyaku | `record-too-large` (`level:"error"`, a single record answered 413) | `signal`, `rejected_seq` |
+| hikyaku | `push-error` (any other failed push; `level:"error"` for a stopped stream (request-level 400, 401, 403) or a refused TLS handshake, `level:"warn"` for back-off cases (507, 5xx, network, timeout)) | `signal`, `code` (the `code` label of `hikyaku_push_requests_total`), `err` (`http-<code>`, the store's request-level reason, or the transport error), `retry_in_s` |
 | nisshi | `seq-gap` (written in the node's file) | `gap_stream`, `from_seq`, `to_seq` |
+
+The rejection events carry `rejected_seq`, not `seq`: `seq` is the agent's own member, and a second `seq` would be `duplicate-field:seq`.
 
 ## annai
 
