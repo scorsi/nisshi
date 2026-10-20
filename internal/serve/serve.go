@@ -251,31 +251,47 @@ func reject(w http.ResponseWriter, index *uint32, reason string) int {
 	return http.StatusBadRequest
 }
 
+// deny answers a request whose identity lacks the endpoint's role: 401 without a known token,
+// 403 for a valid token of another role (ADR 0013).
+func deny(w http.ResponseWriter, id string) int {
+	if id != "" {
+		w.WriteHeader(http.StatusForbidden)
+		return http.StatusForbidden
+	}
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	w.WriteHeader(http.StatusUnauthorized)
+	return http.StatusUnauthorized
+}
+
 // doPush implements the response table of ADR 0003 and returns the status code sent.
 func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
-	node, ok := strings.CutPrefix(s.identity(r), "node:")
+	id := s.identity(r)
+	node, ok := strings.CutPrefix(id, "node:")
 	if !ok {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		w.WriteHeader(http.StatusUnauthorized)
-		return http.StatusUnauthorized
+		return deny(w, id)
+	}
+	if r.ContentLength > maxCompressed {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		return http.StatusRequestEntityTooLarge
+	}
+	if !strings.EqualFold(r.Header.Get("Content-Encoding"), "zstd") {
+		return reject(w, nil, "content-encoding")
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCompressed))
 	if err != nil {
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
 		return http.StatusRequestEntityTooLarge
 	}
-	if r.Header.Get("Content-Encoding") == "zstd" {
-		if body, err = s.dec.DecodeAll(body, nil); err != nil {
-			if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				return http.StatusRequestEntityTooLarge
-			}
-			return reject(w, nil, "body-format")
+	if body, err = s.dec.DecodeAll(body, nil); err != nil {
+		if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return http.StatusRequestEntityTooLarge
 		}
+		return reject(w, nil, "body-zstd")
 	}
 	var req nisshiv1.PushRequest
 	if err := proto.Unmarshal(body, &req); err != nil {
-		return reject(w, nil, "body-format")
+		return reject(w, nil, "body-protobuf")
 	}
 	switch {
 	case req.Node != node:
@@ -333,9 +349,8 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	if s.identity(r) != "reader" {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		w.WriteHeader(http.StatusUnauthorized)
+	if id := s.identity(r); id != "reader" {
+		deny(w, id)
 		return
 	}
 	resp := &nisshiv1.StatusResponse{Agents: map[string]*nisshiv1.AgentStatus{}, DiskReserveBytes: s.cfg.DiskReserve}

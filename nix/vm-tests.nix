@@ -111,11 +111,16 @@ in
     with subtest("delivery scenarios without a restart"):
         print(machine.succeed("${pusher} $(grep -L '\"restart\"' ${fixtures}/delivery/*.json)"))
 
+    with subtest("a reader token may not push (ADR 0013)"):
+        code = machine.succeed("curl -sS -o /dev/null -w '%{http_code}' --cacert ${certs}/server.pem -H 'Authorization: Bearer ${tokens.reader}' -H 'Content-Encoding: zstd' --data-binary x ${url}/v1/push")
+        assert code == "403", code
+
     with subtest("metrics on loopback, in the convention"):
         m = machine.succeed("curl -sS http://127.0.0.1:9474/metrics")
-        # auth: 2x401, disk-full: 1x507, gap: 1 seq gap (fixtures/delivery/).
+        # auth: 2x401, disk-full: 1x507, gap: 1 seq gap (fixtures/delivery/); the reader push: 1x403.
         for want in ['nisshi_records_total{source_node="node-a"} ', "nisshi_seq_gaps_total 1\n",
                      'nisshi_push_requests_total{code="507"} 1\n', 'nisshi_push_requests_total{code="401"} 2\n',
+                     'nisshi_push_requests_total{code="403"} 1\n',
                      "nisshi_disk_free_bytes ", 'nisshi_build_info{version="${nisshi.version}"} 1\n']:
             assert want in m, f"missing {want!r} in\n{m}"
         bad = [l for l in m.splitlines() if l and not l.startswith("#") and not l.startswith("nisshi_")]
@@ -129,8 +134,11 @@ in
     with subtest("status for the reader token only"):
         s = status()
         machine.succeed(f"jq -e '(.streams | length) >= 10 and .diskReserveBytes == \"${toString (8 * mib)}\" and .chainHeads == {{}}' <<'EOF'\n{s}\nEOF")
-        machine.fail("curl -sSf --cacert ${certs}/server.pem -H 'Authorization: Bearer ${tokens.node-a}' ${url}/v1/status")
-        machine.fail("curl -sSf --cacert ${certs}/server.pem ${url}/v1/status")
+        def status_code(auth: str) -> str:
+            return machine.succeed(f"curl -sS -o /dev/null -w '%{{http_code}}' --cacert ${certs}/server.pem {auth} ${url}/v1/status")
+        assert status_code("-H 'Authorization: Bearer ${tokens.node-a}'") == "403"  # ADR 0013
+        assert status_code("-H 'Authorization: Bearer unknown'") == "401"
+        assert status_code("") == "401"
   '';
 
   # Every record fixture through the ingestion path (ADR 0011): verdicts, reasons, index,

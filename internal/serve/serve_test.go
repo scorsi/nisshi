@@ -65,13 +65,17 @@ func push(t *testing.T, url string, o pushOpts) (int, *nisshiv1.PushResponse, *n
 	if o.encoding == "" {
 		o.encoding = "zstd"
 	}
-	if o.encoding == "zstd" {
+	if strings.EqualFold(o.encoding, "zstd") {
 		enc, _ := zstd.NewWriter(nil)
 		body = enc.EncodeAll(body, nil)
 	}
 	req, _ := http.NewRequest("POST", url+"/v1/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-protobuf")
-	if o.encoding != "none" {
+	switch o.encoding {
+	case "none":
+	case "raw-zstd": // the header without compressing raw
+		req.Header.Set("Content-Encoding", "zstd")
+	default:
 		req.Header.Set("Content-Encoding", o.encoding)
 	}
 	if o.token != "none" {
@@ -122,13 +126,17 @@ func TestResponseTable(t *testing.T) {
 	}{
 		{"no token", pushOpts{token: "none", first: 1, records: records("node-a", 1, 2)}, 401, 0, nil, ""},
 		{"unknown token", pushOpts{token: "nope", first: 1, records: records("node-a", 1, 2)}, 401, 0, nil, ""},
-		{"reader token", pushOpts{token: "tok-r", first: 1, records: records("node-a", 1, 2)}, 401, 0, nil, ""},
+		{"reader token", pushOpts{token: "tok-r", first: 1, records: records("node-a", 1, 2)}, 403, 0, nil, ""},
+		{"reader token, bad body", pushOpts{token: "tok-r", raw: []byte("x"), encoding: "none"}, 403, 0, nil, ""},
 		{"other node's token", pushOpts{token: "tok-b", first: 1, records: records("node-a", 1, 2)}, 400, 0, nil, "node-mismatch"},
 		{"request node", pushOpts{node: "node-b", first: 1, records: records("node-b", 1, 2)}, 400, 0, nil, "node-mismatch"},
 		{"stream id", pushOpts{streamID: []byte{1, 2}, first: 1, records: records("node-a", 1, 2)}, 400, 0, nil, "stream-id-format"},
 		{"first seq", pushOpts{first: 0, records: records("node-a", 0, 2)}, 400, 0, nil, "first-seq-zero"},
-		{"garbage body", pushOpts{raw: []byte("not protobuf at all"), encoding: "none"}, 400, 0, nil, "body-format"},
-		{"not zstd", pushOpts{raw: []byte("not zstd"), encoding: "identity"}, 400, 0, nil, "body-format"},
+		{"no encoding", pushOpts{first: 1, records: records("node-a", 1, 2), encoding: "none"}, 400, 0, nil, "content-encoding"},
+		{"identity encoding", pushOpts{first: 1, records: records("node-a", 1, 2), encoding: "identity"}, 400, 0, nil, "content-encoding"},
+		{"encoding before node", pushOpts{node: "node-b", first: 0, records: records("node-b", 1, 2), encoding: "gzip"}, 400, 0, nil, "content-encoding"},
+		{"not zstd", pushOpts{raw: []byte("not zstd"), encoding: "raw-zstd"}, 400, 0, nil, "body-zstd"},
+		{"garbage body", pushOpts{raw: []byte("not protobuf at all")}, 400, 0, nil, "body-protobuf"},
 		{"invalid record", pushOpts{first: 1, records: [][]byte{record("node-a", 1, ""), []byte(`{"v":1}`)}}, 400, 0, idx(1), "missing-field:ts"},
 		{"recv_ts in record", pushOpts{first: 1, records: [][]byte{record("node-a", 1, `,"recv_ts":"x"`)}}, 400, 0, idx(0), "reserved-field:recv_ts"},
 		{"record node", pushOpts{first: 1, records: [][]byte{record("node-b", 1, "")}}, 400, 0, idx(0), "node-mismatch"},
@@ -137,7 +145,7 @@ func TestResponseTable(t *testing.T) {
 		{"exact duplicate", pushOpts{first: 1, records: records("node-a", 1, 10)}, 200, 10, nil, ""},
 		{"overlap", pushOpts{first: 6, records: records("node-a", 6, 10)}, 200, 15, nil, ""},
 		{"gap", pushOpts{first: 21, records: records("node-a", 21, 5)}, 200, 25, nil, ""},
-		{"plain body", pushOpts{first: 26, records: records("node-a", 26, 1), encoding: "none"}, 200, 26, nil, ""},
+		{"upper-case encoding", pushOpts{first: 26, records: records("node-a", 26, 1), encoding: "ZSTD"}, 200, 26, nil, ""},
 	} {
 		code, pr, rj := push(t, ts.URL, tc.o)
 		if code != tc.code {
@@ -168,8 +176,17 @@ func TestResponseTable(t *testing.T) {
 	// Status: reader only, protojson.
 	req, _ := http.NewRequest("GET", ts.URL+"/v1/status", nil)
 	req.Header.Set("Authorization", "Bearer tok-a")
-	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != 401 {
+	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != 403 {
 		t.Errorf("status with a node token: %d", resp.StatusCode)
+	}
+	for tok, want := range map[string]int{"none": 401, "Bearer nope": 401} {
+		r2, _ := http.NewRequest("GET", ts.URL+"/v1/status", nil)
+		if tok != "none" {
+			r2.Header.Set("Authorization", tok)
+		}
+		if resp, _ := http.DefaultClient.Do(r2); resp.StatusCode != want {
+			t.Errorf("status with %s: %d, want %d", tok, resp.StatusCode, want)
+		}
 	}
 	req.Header.Set("Authorization", "Bearer tok-r")
 	resp, _ := http.DefaultClient.Do(req)
@@ -193,7 +210,7 @@ func TestResponseTable(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	s.serveMetrics(rec2, httptest.NewRequest("GET", "/metrics", nil))
 	m := rec2.Body.String()
-	for _, want := range []string{`nisshi_records_total{source_node="node-a"} 21`, "nisshi_duplicate_records_total 15", "nisshi_seq_gaps_total 1", `nisshi_push_requests_total{code="200"} 5`, `nisshi_push_requests_total{code="401"} 3`, `nisshi_seals_total{result="ok"} 0`, "nisshi_disk_free_bytes ", `nisshi_build_info{version="dev"} 1`} {
+	for _, want := range []string{`nisshi_records_total{source_node="node-a"} 21`, "nisshi_duplicate_records_total 15", "nisshi_seq_gaps_total 1", `nisshi_push_requests_total{code="200"} 5`, `nisshi_push_requests_total{code="401"} 2`, `nisshi_push_requests_total{code="403"} 2`, `nisshi_seals_total{result="ok"} 0`, "nisshi_disk_free_bytes ", `nisshi_build_info{version="dev"} 1`} {
 		if !strings.Contains(m, want) {
 			t.Errorf("metrics missing %q in\n%s", want, m)
 		}

@@ -75,7 +75,9 @@ no fixture line in `fixtures/logs/`:
 
 | Level | Check | Reason |
 |---|---|---|
-| request, 400 without `record_index` | the body decodes (zstd, then `PushRequest`) | `body-format` |
+| request, 400 without `record_index` | the `Content-Encoding` header is `zstd` (any case; absent or another value fails) | `content-encoding` |
+| request, 400 without `record_index` | the body is a valid zstd stream | `body-zstd` |
+| request, 400 without `record_index` | the decompressed body is a `PushRequest` | `body-protobuf` |
 | request, 400 without `record_index` | the request's `node` is the authenticated node | `node-mismatch` |
 | request, 400 without `record_index` | `stream_id` is 16 bytes (the 32 hex chars of `stream`) | `stream-id-format` |
 | request, 400 without `record_index` | `first_seq` is not 0 | `first-seq-zero` |
@@ -83,9 +85,11 @@ no fixture line in `fixtures/logs/`:
 | record, 400 with `record_index` | the record's `stream` is the request's `stream_id` in hex | `stream-mismatch` |
 | record, 400 with `record_index` | the record's `seq` is `first_seq` + its index | `seq-mismatch` |
 
-The request checks run in table order before any record. A record is first checked against
-the rules above, then against the request: the first failure of the first invalid record is
-the reason.
+The request checks run in table order before any record, after authentication and the role
+check (401, 403: ADR 0013). A body over the size limits of ADR 0003 is 413 (a declared
+`Content-Length` over 8 MiB before the `content-encoding` check). A record is first checked
+against the rules above, then against the request: the first failure of the first invalid
+record is the reason.
 
 ## Wrapped lines
 
