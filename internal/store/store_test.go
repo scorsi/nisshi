@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"nisshi/internal/logschema"
 )
 
@@ -726,22 +728,22 @@ func TestRestore(t *testing.T) {
 	}
 	s.Push(b)
 	s.SealPast()
-	backup := func(tail []byte) string {
+	backup := func() string {
 		dst := t.TempDir()
 		files, _ := filepath.Glob(filepath.Join(src, "*", "*"))
 		for _, f := range append(files, filepath.Join(src, "FORMAT")) {
 			rel, _ := filepath.Rel(src, f)
 			data, _ := os.ReadFile(f)
 			if n, open := s.st.Days[filepath.Dir(rel)+"/"+strings.TrimSuffix(filepath.Base(rel), ".ndjson.zst")]; open {
-				data = append(data[:n:n], tail...) // the .partial copy, renamed back
+				data = data[:n] // the .partial copy, renamed back
 			}
 			os.MkdirAll(filepath.Join(dst, filepath.Dir(rel)), 0o750)
 			os.WriteFile(filepath.Join(dst, rel), data, 0o640)
 		}
 		return dst
 	}
-	for name, tail := range map[string][]byte{"exact": nil, "truncated tail": s.enc.EncodeAll(record(31), nil)[:20]} {
-		root := backup(tail)
+	for _, name := range []string{"exact"} {
+		root := backup()
 		// Backup artefacts copied by mistake are not store files: the deployment's LAST_RUN marker,
 		// stray *.tmp files, and a directory that is no node (ext4's lost+found).
 		os.WriteFile(filepath.Join(root, "LAST_RUN"), []byte("2026-10-20T12:00:00Z\n"), 0o640)
@@ -786,7 +788,7 @@ func TestRestore(t *testing.T) {
 	}
 	// A .partial left unrenamed is an incomplete restore: it stops the start instead of being
 	// skipped (its records would be missing from the rebuilt hwm).
-	root := backup(nil)
+	root := backup()
 	if err := os.Rename(filepath.Join(root, "node-a", "2026-10-20.ndjson.zst"), filepath.Join(root, "node-a", "2026-10-20.ndjson.zst.partial")); err != nil {
 		t.Fatal(err)
 	}
@@ -796,40 +798,60 @@ func TestRestore(t *testing.T) {
 		}
 		t.Errorf("opened with a .partial left: %v", err)
 	}
-	// An open day with a corrupt frame followed by more bytes stops the start and changes
-	// nothing; the same frames intact keep the valid frames after it (validation R2).
-	for _, corrupt := range []bool{false, true} {
-		root := backup(nil)
+	// An open day must end on a complete frame: a corrupt frame, a corrupt block size running
+	// past the end (indistinguishable from a cut), or a final frame cut short stops the start and
+	// changes nothing; the same frames intact are all kept (validation R2).
+	for _, tc := range []struct{ name, want string }{
+		{"intact", ""},
+		{"corrupt magic", "corrupt zstd frame"},
+		{"corrupt block size", "incomplete zstd frame"},
+		{"cut final frame", "incomplete zstd frame"},
+	} {
+		root := backup()
 		p := filepath.Join(root, "node-a", "2026-10-20.ndjson.zst")
 		data, _ := os.ReadFile(p)
 		at := len(data)
 		for _, seq := range []uint64{31, 32} {
 			data = s.enc.EncodeAll(append(record(seq), '\n'), data)
 		}
-		if corrupt {
+		switch tc.name {
+		case "corrupt magic":
 			data[at] ^= 0xff // the magic of the middle frame
+		case "corrupt block size":
+			var h zstd.Header
+			if err := h.Decode(data[at:]); err != nil {
+				t.Fatal(err)
+			}
+			o := at + h.HeaderSize // first block header of the middle frame: 64 KiB, past the end
+			bh := (int(data[o]) & 7) | (64<<10)<<3
+			data[o], data[o+1], data[o+2] = byte(bh), byte(bh>>8), byte(bh>>16)
+		case "cut final frame":
+			data = data[:len(data)-5]
 		}
 		os.WriteFile(p, data, 0o640)
 		r, err := Open(root, 0, c.now)
-		if !corrupt {
+		if tc.want == "" {
 			if err != nil || r.Streams()[streamA].Hwm != 32 {
 				t.Errorf("intact frames: %v", err)
 			}
 			r.Close()
 			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), "corrupt zstd frame") {
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			if err == nil {
 				r.Close()
 			}
-			t.Errorf("opened with a corrupt middle frame: %v", err)
+			t.Errorf("%s: opened or wrong error: %v", tc.name, err)
 		}
 		if after, _ := os.ReadFile(p); !bytes.Equal(after, data) {
-			t.Error("corrupt open day changed")
+			t.Errorf("%s: open day changed", tc.name)
+		}
+		if _, err := os.Stat(filepath.Join(root, "state.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s: state.json written: %v", tc.name, err)
 		}
 	}
 	// A manifest whose stream ranges do not match its data stops the start.
-	root = backup(nil)
+	root = backup()
 	p := filepath.Join(root, "node-a", "2026-10-19.manifest.json")
 	m, _ := os.ReadFile(p)
 	os.WriteFile(p, bytes.Replace(m, []byte(`"last_seq":25`), []byte(`"last_seq":24`), 1), 0o640)

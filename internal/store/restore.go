@@ -19,8 +19,8 @@ func (s *Store) Rebuilt() (streams int, ok bool) { return s.rebuilt, s.rebuilt >
 // rebuild runs at Open when state.json is absent: a store restored from a backup of its sealed
 // days and the committed prefix of its open days (storage-format, "Restore"). Each stream's hwm
 // is its highest seq, its owner the node directory it was found in (ADR 0014), nisshi's own seq
-// the highest seq-gap seq. Sealed days are checked against their manifests; an open day keeps
-// its complete frames (a truncated tail is cut by recover) and stays open.
+// the highest seq-gap seq. Sealed days are checked against their manifests; an open day must end
+// on a complete frame and stays open.
 func (s *Store) rebuild() error {
 	nodes, err := s.nodes()
 	if err != nil {
@@ -102,18 +102,17 @@ func (s *Store) rebuild() error {
 			if err != nil {
 				return err
 			}
-			n, err := completeFrames(b)
-			if err != nil {
+			if err := wholeFrames(b); err != nil {
 				return fmt.Errorf("%s: %w", filepath.Join(dir, e.Name()), err)
 			}
 			ranges := map[string]*StreamRange{}
-			if _, _, err := readFrom(bytes.NewReader(b[:n]), true, scanRanges(ranges)); err != nil {
+			if _, _, err := readFrom(bytes.NewReader(b), true, scanRanges(ranges)); err != nil {
 				return fmt.Errorf("%s: %w", filepath.Join(dir, e.Name()), err)
 			}
 			if err := add(node, ranges); err != nil {
 				return err
 			}
-			s.st.Days[node+"/"+day] = n
+			s.st.Days[node+"/"+day] = int64(len(b))
 		}
 	}
 	if found {
@@ -154,25 +153,23 @@ func sameRanges(a, b map[string]*StreamRange) bool {
 	return true
 }
 
-// completeFrames is the length of the longest prefix of b made of whole zstd frames (RFC 8878
-// frame and block headers; skippable frames included). Only a last frame cut short (a header or
-// block running past the end of b) is tolerated; anything else is corruption, an error: cutting
-// there would also drop the valid frames after it.
-// shortcut: a corrupt block size that happens to run past the end reads as a cut; a full
-// decode of the tail would tell them apart, if a restore ever meets one.
-func completeFrames(b []byte) (int64, error) {
-	off := 0
-	for off < len(b) {
+// wholeFrames checks that b is made of whole zstd frames only (RFC 8878 frame and block headers;
+// skippable frames included). A tail cut short is refused like any corruption: a corrupt block
+// size can run past the end too, and cutting there would drop the valid frames after it. The
+// backup copies whole frames, so a legitimate restore never ends mid-frame (storage-format,
+// "Restore").
+func wholeFrames(b []byte) error {
+	for off := 0; off < len(b); {
 		n, err := frameLen(b[off:])
 		if errors.Is(err, errShort) || errors.Is(err, io.ErrUnexpectedEOF) {
-			break
+			return fmt.Errorf("incomplete zstd frame at byte %d, %d bytes after it: the file must end on a complete frame (storage-format, \"Restore\")", off, len(b)-off)
 		}
 		if err != nil {
-			return 0, fmt.Errorf("corrupt zstd frame at byte %d, %d bytes after it: %w", off, len(b)-off, err)
+			return fmt.Errorf("corrupt zstd frame at byte %d, %d bytes after it: %w", off, len(b)-off, err)
 		}
 		off += n
 	}
-	return int64(off), nil
+	return nil
 }
 
 var errShort = errors.New("truncated frame")

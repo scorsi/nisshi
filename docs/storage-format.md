@@ -95,9 +95,14 @@ pushes, and logs one `restore` event:
 
 - each sealed day is checked against its manifest (content hash, record count, stream ranges)
   when its data file exists; a mismatch stops the start;
-- each open day (no manifest) keeps its complete frames, a truncated last frame is cut, and the
-  day stays open; a frame that is corrupt rather than cut short (bad magic, reserved block
-  type, block over 128 KiB) stops the start, so that no valid frame after it is ever cut;
+- each open day (no manifest) must end exactly on a complete zstd frame, and stays open. A
+  corrupt frame (bad magic, reserved block type, block over 128 KiB) or an incomplete tail (a
+  header or block running past the end) stops the start with the file, the offset and the
+  bytes after it, and changes nothing. A tail is never cut at restore: a corrupt block size can
+  run past the end too, and cutting there would delete the valid frames after it. The
+  deployment's backup copies exactly the committed length (whole frames) through a `.tmp` file
+  and a rename, so a legitimate `.partial` never ends mid-frame; an operator who knows a tail
+  is garbage cuts it by hand (`truncate -s <offset>`) before starting;
 - each stream's `hwm` is its highest `seq` found, its owner the node directory it was found in
   (a stream in two node directories stops the start), nisshi's own `seq` the highest `seq` of
   the `seq-gap` records.

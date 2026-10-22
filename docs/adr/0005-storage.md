@@ -52,3 +52,10 @@ Review findings: nisshi review §2.2, §2.4, §2.11, §3.5; cross review §2.1.
   days open, so a restored store neither stores a backed-up record twice nor reuses one of its
   own `seq-gap` numbers. A day file without manifest and unknown to an existing `state.json`
   is still truncated to zero: restoring files under a stale state is not a restore.
+- **Restore ends on a whole frame** (validation R2 residual): an open day file restored without
+  `state.json` must end exactly on a complete zstd frame; a corrupt or incomplete tail stops the
+  start and changes nothing, instead of being cut. A corrupt block size in a middle frame can
+  run past the end of the file and look like a cut final frame, and cutting it would delete the
+  valid frames after it. The backup copies whole frames (committed length, `.tmp` then rename),
+  so a legitimate restore never ends mid-frame; an operator cuts a known-garbage tail by hand.
+  Crash recovery with `state.json` (committed lengths known) is unchanged.
