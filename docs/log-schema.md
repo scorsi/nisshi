@@ -135,7 +135,7 @@ validation would refuse.
 | hikyaku | `journald-suppressed` | `unit`, `count` |
 | hikyaku | `journal-gap` | `from_ts`, `to_ts` |
 | hikyaku | `file-truncated` | `path` |
-| hikyaku | `rejected` (`level:"error"`, replaces a record the store refused, same `seq`) | `err` (store's reason), `raw_b64` (the refused record's bytes), `service` and `ts` of the refused record when readable, else `hikyaku` and the agent's time |
+| hikyaku | `rejected` (`level:"error"`, replaces a record the store refused, same `seq`) | `err` (store's reason), `raw_b64` (the refused record's bytes), `service` and `ts` of the refused record when readable, else `hikyaku` and the agent's time; optional `truncated` (bool, `true` only when `raw_b64` holds just the beginning of the refused record: a record spooled before hikyaku's ADR 0013 budget) |
 | hikyaku | `record-rejected` (`level:"error"`) | `signal`, `rejected_seq`, `reason` |
 | hikyaku | `replacement-rejected` (`level:"error"`, the store refused the replacement too; the stream stops) | `signal`, `rejected_seq`, `err` (store's reason) |
 | hikyaku | `record-too-large` (`level:"error"`, a single record answered 413) | `signal`, `rejected_seq` |
