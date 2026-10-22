@@ -300,8 +300,8 @@ func Verify(root string, w io.Writer) error {
 		}
 		for i, m := range ms {
 			day := strings.TrimSuffix(filepath.Base(m.path), ".manifest.json")
-			if m.Node != node || m.V != 1 || m.Day != day {
-				bad("%s: node, version or day mismatch", m.path)
+			if m.Node != node || m.V != 1 || m.Day != day || !validDay(day) {
+				bad("%s: node, version or day mismatch, or not a calendar day", m.path)
 			}
 			// A missing data file is retention (storage-format); any other error is a problem.
 			if c, ok := contents[s.dataPath(node, day)]; ok {

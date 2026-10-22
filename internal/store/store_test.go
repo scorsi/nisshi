@@ -571,6 +571,13 @@ func TestVerifyStrict(t *testing.T) {
 			}
 			os.Chmod(filepath.Join(s.root, "node-a"), 0)
 		},
+		"not a calendar day": func(s *Store) {
+			p := s.manifestPath("node-a", "2026-10-19")
+			b, _ := os.ReadFile(p)
+			os.WriteFile(s.manifestPath("node-a", "2026-02-30"), bytes.Replace(b, []byte(`"day":"2026-10-19"`), []byte(`"day":"2026-02-30"`), 1), 0o640)
+			os.Rename(s.dataPath("node-a", "2026-10-19"), s.dataPath("node-a", "2026-02-30"))
+			os.Remove(p)
+		},
 		"long line": func(s *Store) {
 			os.WriteFile(s.dataPath("node-a", "2026-10-20"), s.enc.EncodeAll(bytes.Repeat([]byte("a"), maxLine+1), nil), 0o640)
 		},

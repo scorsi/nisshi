@@ -56,8 +56,8 @@ func (s *Store) rebuild() error {
 		for _, m := range ms {
 			found = true
 			day := strings.TrimSuffix(filepath.Base(m.path), ".manifest.json")
-			if m.Day != day || m.Node != node {
-				return fmt.Errorf("%s: day or node mismatch", m.path)
+			if m.Day != day || m.Node != node || !validDay(day) {
+				return fmt.Errorf("%s: day or node mismatch, or not a calendar day", m.path)
 			}
 			ranges := map[string]*StreamRange{}
 			for _, r := range m.Streams {

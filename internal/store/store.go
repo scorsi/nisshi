@@ -236,6 +236,12 @@ func (s *Store) recover() error {
 	return s.writeState()
 }
 
+// validDay: a day in a file name or a manifest is a real calendar day, YYYY-MM-DD.
+func validDay(d string) bool {
+	_, err := time.Parse("2006-01-02", d)
+	return err == nil
+}
+
 func exists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
