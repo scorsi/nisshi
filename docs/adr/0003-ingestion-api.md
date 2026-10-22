@@ -62,7 +62,9 @@ Review findings: nisshi review §2.8, §2.9, §2.15; challenge §3.3. The limits
 compressed, 64 MiB decompressed) are unchanged.
 
 - **One push at a time** is processed, from reading the body to the commit; later pushes wait
-  in their connection (not refused). Records are not copied out of the decompressed body and
+  in their connection, at most 25 s (under hikyaku's 30 s request timeout), then get **503**
+  with nothing read or stored: the agent backs off and retries (validation R4; a long seal or
+  a stuck `fsync` holds the slot, and the server's deadlines do not end a waiting handler). Records are not copied out of the decompressed body and
   are streamed into the frame; a body with more records than valid records could fill
   (64 MiB / 128 bytes) keeps only the first ones, among which is the first invalid record that
   the indexed 400 reports. Measurements: [resources](../resources.md).

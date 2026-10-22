@@ -52,6 +52,10 @@ var (
 	readTimeout  = 60 * time.Second  // headers and body
 	writeTimeout = 120 * time.Second // from the end of the headers: queue, commit, a seal holding the store
 	idleTimeout  = 120 * time.Second
+	// admitTimeout bounds the wait for the push slot (a long seal or a stuck fsync holds it):
+	// the server's deadlines do not end a handler. Under hikyaku's 30 s so the agent reads the
+	// 503 and backs off.
+	admitTimeout = 25 * time.Second
 )
 
 func httpServer(h http.Handler, log *slog.Logger) *http.Server {
@@ -317,10 +321,12 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 	if !strings.EqualFold(r.Header.Get("Content-Encoding"), "zstd") {
 		return reject(w, nil, "content-encoding")
 	}
+	admit, cancel := context.WithTimeout(r.Context(), admitTimeout)
+	defer cancel()
 	select {
 	case s.pushing <- struct{}{}:
 		defer func() { <-s.pushing }()
-	case <-r.Context().Done():
+	case <-admit.Done():
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return http.StatusServiceUnavailable
 	}

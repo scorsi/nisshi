@@ -389,19 +389,27 @@ func TestDecodePush(t *testing.T) {
 	}
 }
 
-// Pushes queue on one admission slot; an agent's status is kept bounded.
+// A push waits while another holds the admission slot, gets 503 when the wait outlasts
+// admitTimeout, and goes through once the slot is free; an agent's status is kept bounded.
 func TestPushAdmissionAndStatus(t *testing.T) {
+	defer func(d time.Duration) { admitTimeout = d }(admitTimeout)
+	admitTimeout = 300 * time.Millisecond
 	s, ts, _ := newTestServer(t, 0)
-	done := make(chan int, 3)
-	for i := 0; i < 3; i++ {
-		sid := bytes.Repeat([]byte{byte(i + 1)}, 16)
-		recs := [][]byte{bytes.ReplaceAll(record("node-a", 1, ""), []byte(streamHex), []byte(hex.EncodeToString(sid)))}
-		go func() { code, _, _ := push(t, ts.URL, pushOpts{streamID: sid, first: 1, records: recs}); done <- code }()
+	s.pushing <- struct{}{} // a push in progress
+	if code, _, _ := push(t, ts.URL, pushOpts{first: 1, records: records("node-a", 1, 1)}); code != 503 {
+		t.Errorf("slot held past admitTimeout: %d", code)
 	}
-	for i := 0; i < 3; i++ {
-		if code := <-done; code != 200 {
-			t.Errorf("concurrent push: %d", code)
-		}
+	admitTimeout = 5 * time.Second
+	done := make(chan int, 1)
+	go func() { code, _, _ := push(t, ts.URL, pushOpts{first: 1, records: records("node-a", 1, 1)}); done <- code }()
+	select {
+	case code := <-done:
+		t.Fatalf("admitted while the slot is held: %d", code)
+	case <-time.After(200 * time.Millisecond):
+	}
+	<-s.pushing
+	if code := <-done; code != 200 {
+		t.Errorf("after the slot is freed: %d", code)
 	}
 	body, _ := proto.Marshal(&nisshiv1.PushRequest{Node: "node-a", StreamId: bytes.Repeat([]byte{1}, 16), FirstSeq: 1, Status: &nisshiv1.AgentStatus{Version: strings.Repeat("v", 10000)}})
 	body = append(body, 0x2a, 2, 0x78, 0x01) // status with an unknown field 15
