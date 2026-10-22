@@ -69,6 +69,20 @@ is `ts-format`); `level` one of the four strings; `event` matches `^[a-z][a-z0-9
 integer from 1 to 2^64-1 written in plain digits; `source` `journald` or `file`. Nested objects
 and service fields are not checked. Fixture format: [fixtures/logs/README.md](../fixtures/logs/README.md).
 
+Parser edges, each fixed by fixture lines:
+
+- Member names are case-sensitive and compared exactly, after unescaping: `TS`, `Seq` or
+  `SERVICE` is a free service field, never the envelope's `ts`, `seq` or `service`. It is not
+  reserved, it does not duplicate the envelope member, and it does not stand in for a missing
+  one (`missing-field:ts` with only `TS`); `qname` and `QNAME` are two fields.
+- Nesting: a line nested up to 10 000 levels deep (the top-level object is level 1, each object
+  or array inside it one more) is valid JSON text; deeper is `not-json`.
+- Numbers outside `v` and `seq` are checked for JSON syntax only: any magnitude or precision is
+  valid (`1e10000`, a 400-digit integer), and the store keeps the digits as written. In `v` and
+  `seq` the same numbers are `v-format` and `seq-format`.
+- A `\u` escape of a lone UTF-16 surrogate (`\ud800`, `\udc00`) is valid JSON text: a string
+  holding one is a string (`msg`, a service field), stored as written.
+
 ### Ingestion reasons (M1)
 
 `POST /v1/push` (ADR 0003) also refuses a request whose envelope does not match the request

@@ -376,24 +376,33 @@ func (p *pusher) readStore() ([]stored, error) {
 			if _, err := time.Parse(tsLayout, string(m[1])); err != nil || !strings.HasPrefix(string(m[1]), day) {
 				return nil, fmt.Errorf("%s: recv_ts %s not a ts of day %s", f, m[1], day)
 			}
-			var e struct {
-				Event     string `json:"event"`
-				Service   string `json:"service"`
-				Stream    string `json:"stream"`
-				GapStream string `json:"gap_stream"`
-				Seq       uint64 `json:"seq"`
-			}
-			if err := json.Unmarshal(line, &e); err != nil {
+			e, err := members(line)
+			if err != nil {
 				return nil, fmt.Errorf("%s: %w: %s", f, err, line)
 			}
-			s := stored{line: append(line[:len(line)-len(m[0])], '}'), stream: e.Stream, seq: e.Seq}
-			if e.Event == "seq-gap" && e.Service == "nisshi" {
-				s.gap = e.GapStream
+			seq, _ := strconv.ParseUint(string(e["seq"]), 10, 64)
+			s := stored{line: append(line[:len(line)-len(m[0])], '}'), stream: str(e, "stream"), seq: seq}
+			if str(e, "event") == "seq-gap" && str(e, "service") == "nisshi" {
+				s.gap = str(e, "gap_stream")
 			}
 			out = append(out, s)
 		}
 	}
 	return out, nil
+}
+
+// members reads a record's top-level members by their exact names: encoding/json's struct
+// decoding would also match free service fields such as `SEQ` or `Stream` (log-schema.md).
+func members(line []byte) (map[string]json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	return m, json.Unmarshal(line, &m)
+}
+
+// str is the string member k of m, "" when absent or not a string.
+func str(m map[string]json.RawMessage, k string) string {
+	var s string
+	json.Unmarshal(m[k], &s)
+	return s
 }
 
 // ranges prints sorted seqs as "1-10,21-30".
@@ -453,17 +462,13 @@ func (p *pusher) runFixtures(path string) error {
 			rec = []byte(r.Prefix + strings.Repeat(r.Repeat, r.Count) + r.Suffix)
 		}
 		stream, seq := defaultStream, uint64(1)
-		var env struct {
-			Stream string
-			Seq    json.Number
-		}
-		if json.Unmarshal(rec, &env) == nil {
-			if len(env.Stream) == 32 {
-				if _, err := hex.DecodeString(env.Stream); err == nil {
-					stream = env.Stream
+		if env, err := members(rec); err == nil {
+			if st := str(env, "stream"); len(st) == 32 {
+				if _, err := hex.DecodeString(st); err == nil {
+					stream = st
 				}
 			}
-			if n, err := strconv.ParseUint(env.Seq.String(), 10, 64); err == nil && n > 0 {
+			if n, err := strconv.ParseUint(string(env["seq"]), 10, 64); err == nil && n > 0 {
 				seq = n
 			}
 		}
