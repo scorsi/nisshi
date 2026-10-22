@@ -27,3 +27,18 @@ tell later whether a node went silent.
 
 - Silent-node detection is not implemented here; it is glue over `/v1/status` and the agent's
   heartbeat, built later on another component.
+
+## Amendment — 2026-10-22 (accepted, owner decision)
+
+Review finding: nisshi review §2.15 (the stream states grow with every new stream id).
+
+- No cap on the number of streams per node: a stream's `hwm` is kept forever (forgetting it
+  would let old duplicates in again), and a cap would need a refusal and an eviction policy for
+  a case that only a broken or compromised agent creates. Instead nisshi exposes the gauge
+  `nisshi_streams{source_node}`, the number of known streams owned by each node (ADR 0014), so
+  an alert can catch a node that keeps creating streams.
+- The full list of nisshi's own metrics is now: `nisshi_records_total{source_node}`,
+  `nisshi_duplicate_records_total`, `nisshi_seq_gaps_total`,
+  `nisshi_push_requests_total{code}`, `nisshi_seals_total{result}`,
+  `nisshi_streams{source_node}`, `nisshi_disk_free_bytes`, `nisshi_disk_reserve_bytes`,
+  `nisshi_build_info{version}`.

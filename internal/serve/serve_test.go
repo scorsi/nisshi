@@ -215,7 +215,7 @@ func TestResponseTable(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	s.serveMetrics(rec2, httptest.NewRequest("GET", "/metrics", nil))
 	m := rec2.Body.String()
-	for _, want := range []string{`nisshi_records_total{source_node="node-a"} 21`, "nisshi_duplicate_records_total 15", "nisshi_seq_gaps_total 1", `nisshi_push_requests_total{code="200"} 5`, `nisshi_push_requests_total{code="401"} 2`, `nisshi_push_requests_total{code="403"} 5`, `nisshi_seals_total{result="ok"} 0`, "nisshi_disk_free_bytes ", `nisshi_build_info{version="dev"} 1`} {
+	for _, want := range []string{`nisshi_records_total{source_node="node-a"} 21`, "nisshi_duplicate_records_total 15", "nisshi_seq_gaps_total 1", `nisshi_push_requests_total{code="200"} 5`, `nisshi_push_requests_total{code="401"} 2`, `nisshi_push_requests_total{code="403"} 5`, `nisshi_seals_total{result="ok"} 0`, `nisshi_streams{source_node="node-a"} 1`, "nisshi_disk_free_bytes ", `nisshi_build_info{version="dev"} 1`} {
 		if !strings.Contains(m, want) {
 			t.Errorf("metrics missing %q in\n%s", want, m)
 		}

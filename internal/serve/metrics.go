@@ -60,6 +60,14 @@ func (s *Server) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	s.metrics.mu.Unlock()
+	perNode := map[string]int{}
+	for _, st := range s.st.Streams() {
+		perNode[st.Node]++
+	}
+	fmt.Fprintf(&b, "# HELP nisshi_streams Known streams (hwm kept forever), by owning node.\n# TYPE nisshi_streams gauge\n")
+	for _, n := range sortedKeys(perNode) {
+		fmt.Fprintf(&b, "nisshi_streams{source_node=%q} %d\n", n, perNode[n])
+	}
 	free, _ := s.st.FreeBytes()
 	fmt.Fprintf(&b, "# HELP nisshi_disk_free_bytes Free space on the store's filesystem.\n# TYPE nisshi_disk_free_bytes gauge\nnisshi_disk_free_bytes %d\n", free)
 	fmt.Fprintf(&b, "# HELP nisshi_disk_reserve_bytes Free space below which pushes get 507.\n# TYPE nisshi_disk_reserve_bytes gauge\nnisshi_disk_reserve_bytes %d\n", s.cfg.DiskReserve)
