@@ -760,6 +760,38 @@ func TestRestore(t *testing.T) {
 		}
 		t.Errorf("opened with a .partial left: %v", err)
 	}
+	// An open day with a corrupt frame followed by more bytes stops the start and changes
+	// nothing; the same frames intact keep the valid frames after it (validation R2).
+	for _, corrupt := range []bool{false, true} {
+		root := backup(nil)
+		p := filepath.Join(root, "node-a", "2026-10-20.ndjson.zst")
+		data, _ := os.ReadFile(p)
+		at := len(data)
+		for _, seq := range []uint64{31, 32} {
+			data = s.enc.EncodeAll(append(record(seq), '\n'), data)
+		}
+		if corrupt {
+			data[at] ^= 0xff // the magic of the middle frame
+		}
+		os.WriteFile(p, data, 0o640)
+		r, err := Open(root, 0, c.now)
+		if !corrupt {
+			if err != nil || r.Streams()[streamA].Hwm != 32 {
+				t.Errorf("intact frames: %v", err)
+			}
+			r.Close()
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "corrupt zstd frame") {
+			if err == nil {
+				r.Close()
+			}
+			t.Errorf("opened with a corrupt middle frame: %v", err)
+		}
+		if after, _ := os.ReadFile(p); !bytes.Equal(after, data) {
+			t.Error("corrupt open day changed")
+		}
+	}
 	// A manifest whose stream ranges do not match its data stops the start.
 	root = backup(nil)
 	p := filepath.Join(root, "node-a", "2026-10-19.manifest.json")

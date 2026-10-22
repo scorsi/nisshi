@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,7 +102,10 @@ func (s *Store) rebuild() error {
 			if err != nil {
 				return err
 			}
-			n := completeFrames(b)
+			n, err := completeFrames(b)
+			if err != nil {
+				return fmt.Errorf("%s: %w", filepath.Join(dir, e.Name()), err)
+			}
 			ranges := map[string]*StreamRange{}
 			if _, _, err := readFrom(bytes.NewReader(b[:n]), true, scanRanges(ranges)); err != nil {
 				return fmt.Errorf("%s: %w", filepath.Join(dir, e.Name()), err)
@@ -151,17 +155,24 @@ func sameRanges(a, b map[string]*StreamRange) bool {
 }
 
 // completeFrames is the length of the longest prefix of b made of whole zstd frames (RFC 8878
-// frame and block headers; skippable frames included).
-func completeFrames(b []byte) int64 {
+// frame and block headers; skippable frames included). Only a last frame cut short (a header or
+// block running past the end of b) is tolerated; anything else is corruption, an error: cutting
+// there would also drop the valid frames after it.
+// shortcut: a corrupt block size that happens to run past the end reads as a cut; a full
+// decode of the tail would tell them apart, if a restore ever meets one.
+func completeFrames(b []byte) (int64, error) {
 	off := 0
 	for off < len(b) {
 		n, err := frameLen(b[off:])
-		if err != nil {
+		if errors.Is(err, errShort) || errors.Is(err, io.ErrUnexpectedEOF) {
 			break
+		}
+		if err != nil {
+			return 0, fmt.Errorf("corrupt zstd frame at byte %d, %d bytes after it: %w", off, len(b)-off, err)
 		}
 		off += n
 	}
-	return int64(off)
+	return int64(off), nil
 }
 
 var errShort = errors.New("truncated frame")
@@ -184,7 +195,12 @@ func frameLen(b []byte) (int, error) {
 		}
 		bh := int(b[off]) | int(b[off+1])<<8 | int(b[off+2])<<16
 		size := bh >> 3
-		if bh>>1&3 == 1 { // RLE: one byte repeated
+		switch {
+		case bh>>1&3 == 3:
+			return 0, errors.New("reserved block type")
+		case size > 128<<10: // Block_Maximum_Size
+			return 0, fmt.Errorf("block of %d bytes", size)
+		case bh>>1&3 == 1: // RLE: one byte repeated
 			size = 1
 		}
 		off += 3 + size

@@ -96,7 +96,8 @@ pushes, and logs one `restore` event:
 - each sealed day is checked against its manifest (content hash, record count, stream ranges)
   when its data file exists; a mismatch stops the start;
 - each open day (no manifest) keeps its complete frames, a truncated last frame is cut, and the
-  day stays open;
+  day stays open; a frame that is corrupt rather than cut short (bad magic, reserved block
+  type, block over 128 KiB) stops the start, so that no valid frame after it is ever cut;
 - each stream's `hwm` is its highest `seq` found, its owner the node directory it was found in
   (a stream in two node directories stops the start), nisshi's own `seq` the highest `seq` of
   the `seq-gap` records.
