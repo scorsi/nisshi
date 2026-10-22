@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -398,6 +399,18 @@ func TestPushAdmissionAndStatus(t *testing.T) {
 	s.pushing <- struct{}{} // a push in progress
 	if code, _, _ := push(t, ts.URL, pushOpts{first: 1, records: records("node-a", 1, 1)}); code != 503 {
 		t.Errorf("slot held past admitTimeout: %d", code)
+	}
+	// A declared body that never arrives does not delay the 503 (validation N1): net/http would
+	// drain it first, until the 60 s read deadline (none in this test server).
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "POST /v1/push HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer tok-a\r\nContent-Encoding: zstd\r\nContent-Length: 100\r\n\r\n")
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if resp, err := http.ReadResponse(bufio.NewReader(conn), nil); err != nil || resp.StatusCode != 503 {
+		t.Errorf("incomplete body, slot held: %v %v", resp, err)
 	}
 	admitTimeout = 5 * time.Second
 	done := make(chan int, 1)

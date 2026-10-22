@@ -327,6 +327,8 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 	case s.pushing <- struct{}{}:
 		defer func() { <-s.pushing }()
 	case <-admit.Done():
+		// The body is unread: without close, net/http drains it before the 503 (validation N1).
+		w.Header().Set("Connection", "close")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return http.StatusServiceUnavailable
 	}
