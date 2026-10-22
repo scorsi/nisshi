@@ -194,6 +194,10 @@ func TestCommitCrash(t *testing.T) {
 				t.Errorf("%s: writer not stopped", step)
 			}
 		}
+		// A failed rollback leaves the frame past the committed length, for recovery to cut.
+		if fi, _ := os.Stat(s.dataPath("node-a", "2026-10-19")); step == "tmp truncate" && fi.Size() <= s.st.Days["node-a/2026-10-19"] {
+			t.Errorf("%s: tail already cut: %d bytes", step, fi.Size())
+		}
 		s = open(t, root, c)
 		hwm := s.Streams()[streamA].Hwm
 		if hwm != tc.hwm {
@@ -631,10 +635,26 @@ func TestStreamOwner(t *testing.T) {
 	for _, node := range []string{"node-a", "node-b"} {
 		b := batch(1, 1)
 		b.Node, b.Stream = node, strings.Repeat("c", 32)
+		b.Records[0] = bytes.ReplaceAll(bytes.ReplaceAll(b.Records[0], []byte(streamA), []byte(b.Stream)), []byte("node-a"), []byte(node))
 		go func() { _, err := s.Push(b); errs <- err }()
 	}
-	if e1, e2 := <-errs, <-errs; (e1 == nil) == (e2 == nil) {
+	e1, e2 := <-errs, <-errs
+	if e1 != nil {
+		e1, e2 = e2, e1
+	}
+	if e1 != nil || !errors.Is(e2, ErrStreamOwner) {
 		t.Errorf("racing first pushes: %v, %v", e1, e2)
+	}
+	if st := s.Streams()[strings.Repeat("c", 32)]; st.Hwm != 1 {
+		t.Errorf("racing first pushes: %+v", st)
+	}
+	for _, node := range []string{"node-a", "node-b"} {
+		ls, _ := lines(t, root, node)
+		for _, l := range ls {
+			if e, _ := parseEnvelope([]byte(l)); e.Stream == strings.Repeat("c", 32) && e.Node != node {
+				t.Errorf("%s holds a record of %s", node, e.Node)
+			}
+		}
 	}
 }
 

@@ -437,9 +437,11 @@ func (s *Store) checkOwner(node, stream string) error {
 // rollback cuts a day file back to its committed length after a failed commit. If that fails
 // too, the file's tail is unknown: the writer stops until a restart recovers it.
 func (s *Store) rollback(path string, committed int64, cause error) error {
-	err := os.Truncate(path, committed)
+	var err error
 	if s.crash != nil && s.crash("truncate") {
-		err = errors.New("truncate failed")
+		err = errors.New("truncate failed") // before the truncate: the uncommitted tail stays
+	} else {
+		err = os.Truncate(path, committed)
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.broken = fmt.Errorf("rollback of %s: %w", path, err)
