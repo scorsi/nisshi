@@ -69,11 +69,13 @@ Harmonisation across services:
 
 ## Amendment — 2026-10-22 (accepted, owner decision: notes, no design change)
 
-What the fixtures do not fix yet (nisshi review §3.4): Go's `encoding/json` (nisshi) and
-`serde_json` (hikyaku) differ outside the current fixtures, on JSON nesting depth (10 000
-against about 128), on numbers out of `f64` range in service fields (`1e10000`: Go accepts
-the syntax, Rust refuses), and on lone UTF-16 surrogates (`\ud800`). A line in one of these
-corners can pass `nisshi validate --logs` and still be wrapped as `unparsed` by hikyaku: the
-bytes travel, their interpretation changes. Free service fields named like envelope members
-in another case (`TS`, `SEQ`) are accepted and never read as the envelope (storage-format).
-Deciding these limits means fixtures first, in both implementations.
+Parser corners (nisshi review §3.4): Go's `encoding/json` (nisshi) and `serde_json` (hikyaku)
+differed outside the fixtures on JSON nesting depth (10 000 against about 128), on numbers
+out of `f64` range in service fields (`1e10000`), on lone UTF-16 surrogates (`\ud800`), and on
+free service fields named like envelope members in another case (`TS`, `SEQ`). A line in one
+of these corners could pass `nisshi validate --logs` and still be wrapped as `unparsed` by
+hikyaku. These corners are now fixed by fixture lines (log-schema, "Parser edges",
+2026-10-22): nesting up to 64 levels, level 65 `not-json`; numbers outside `v` and `seq`
+syntax-only, any magnitude; lone surrogate escapes valid; member names case-sensitive. Both
+implementations run the same fixtures. A corner found later is decided the same way: fixtures
+first, in both implementations.

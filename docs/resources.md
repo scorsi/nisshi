@@ -29,8 +29,9 @@ nightly seal (seconds).
 
 `GOMEMLIMIT` is a GC target, not a ceiling: a push needs its decompressed body in memory. One
 push at a time is processed from body read to commit (others wait, unread, in their
-connection); records alias the decompressed body and are streamed into the frame, so the
-worst case is about one decompressed body plus the encoder. Max RSS of `nisshi serve` with
+connection); records alias the decompressed body and are streamed into the frame, and at most 256 bytes
+of an agent status' `version` are copied out of it, so the worst case is about one
+decompressed body plus the encoder. Max RSS of `nisshi serve` with
 `GOMEMLIMIT=64MiB`, one push, measured on macOS arm64 on 2026-10-22 (before → after the review
 fixes):
 

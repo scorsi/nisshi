@@ -38,7 +38,7 @@ each object (storage-format, "Records"). The agent already wrote `node`, `stream
 | a record invalid: not a JSON object, envelope invalid under the published rules (0004), a store field present (`recv_ts`), `node`/`stream`/`seq` not matching the request | nothing (whole batch) | 400, `PushRejected{record_index, reason}` of the first invalid record |
 | the request itself invalid: `node` ≠ authenticated node, malformed `stream_id`, `first_seq` = 0 | nothing | 400, `PushRejected{reason}` without index |
 | the stream was first pushed by another node, or is nisshi's reserved stream (0014) | nothing | 403, `PushRejected{reason: "stream-owner"}` without index |
-| free space below `disk_reserve`, or a write error | rolls back to last commit | 507 |
+| free space below `disk_reserve`, or a write error | rolls back to last commit (exception: a state write that may be published, amendment 2026-10-22) | 507 |
 | the store's clock puts the batch on a sealed day (0006 amendment) | nothing | 503 |
 | body too large | nothing | 413 |
 
@@ -71,4 +71,12 @@ compressed, 64 MiB decompressed) are unchanged.
 - **Deadlines**: 60 s to read a request (headers and body), 120 s to write its response, 120 s
   for an idle connection, 64 KiB of headers. A body not received in time is answered like a
   body too large (413): the agent splits the batch, which also gets a slow link through.
-- An agent's `status` is kept with `version` cut to 256 bytes and unknown fields dropped.
+- An agent's `status` is kept with `version` cut to at most 256 bytes on a UTF-8 boundary and
+  unknown fields dropped; only the kept bytes are copied out of the body.
+- **A write error once the commit may be published is not rolled back** (validation R8). When
+  `state.json` was renamed but its directory sync failed, the new state may or may not survive
+  a power loss and may name the frame just written: nisshi keeps the data, answers **500**, and
+  stops the writer. When the rollback of an earlier write error itself fails, the push answers
+  507 and the writer stops too. Every later push answers **500** until a restart, whose
+  recovery keeps or cuts the frame according to the `state.json` that survived. The agent
+  retries with back-off: an acked batch is never lost, an unacked one is resent.
