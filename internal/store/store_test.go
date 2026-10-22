@@ -228,6 +228,11 @@ func TestRecoverRefuses(t *testing.T) {
 		"null days":    func(root string) { rewriteState(root, `"days":null`) },
 		"null stream":  func(root string) { rewriteState(root, `"streams":{"`+streamA+`":null}`) },
 		"version":      func(root string) { rewriteState(root, `"v":2`) },
+		"empty object": func(root string) { os.WriteFile(filepath.Join(root, "state.json"), []byte("{}"), 0o640) },
+		"null":         func(root string) { os.WriteFile(filepath.Join(root, "state.json"), []byte("null"), 0o640) },
+		"no days": func(root string) {
+			os.WriteFile(filepath.Join(root, "state.json"), []byte(`{"v":1,"streams":{},"own_seq":0}`), 0o640)
+		},
 		"unreadable": func(root string) {
 			if os.Geteuid() == 0 {
 				os.Remove(filepath.Join(root, day)) // root reads anything: fall back to a missing file

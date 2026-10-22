@@ -139,17 +139,30 @@ func (s *Store) load() error {
 	s.rebuilt = -1
 	b, err := os.ReadFile(filepath.Join(s.root, "state.json"))
 	if err == nil {
-		if err := json.Unmarshal(b, &s.st); err != nil {
+		// Into a blank state, every member required: a member left out must not inherit the
+		// empty maps of a new store, whose recovery would cut every open day to zero.
+		var members map[string]json.RawMessage
+		var st state
+		if err := json.Unmarshal(b, &members); err != nil {
 			return fmt.Errorf("state.json: %w", err)
 		}
-		if s.st.V != 1 || s.st.Days == nil || s.st.Streams == nil {
-			return fmt.Errorf("state.json: version %d or days/streams missing", s.st.V)
+		for _, k := range []string{"v", "days", "streams", "own_seq"} {
+			if _, ok := members[k]; !ok {
+				return fmt.Errorf("state.json: %s missing", k)
+			}
 		}
-		for k, v := range s.st.Streams {
+		if err := json.Unmarshal(b, &st); err != nil {
+			return fmt.Errorf("state.json: %w", err)
+		}
+		if st.V != 1 || st.Days == nil || st.Streams == nil {
+			return fmt.Errorf("state.json: version %d or days/streams null", st.V)
+		}
+		for k, v := range st.Streams {
 			if v == nil {
 				return fmt.Errorf("state.json: stream %s is null", k)
 			}
 		}
+		s.st = st
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
