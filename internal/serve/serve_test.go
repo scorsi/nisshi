@@ -401,7 +401,10 @@ func TestPushAdmissionAndStatus(t *testing.T) {
 	}
 	admitTimeout = 5 * time.Second
 	done := make(chan int, 1)
-	go func() { code, _, _ := push(t, ts.URL, pushOpts{first: 1, records: records("node-a", 1, 1)}); done <- code }()
+	go func() {
+		code, _, _ := push(t, ts.URL, pushOpts{first: 1, records: records("node-a", 1, 1)})
+		done <- code
+	}()
 	select {
 	case code := <-done:
 		t.Fatalf("admitted while the slot is held: %d", code)
