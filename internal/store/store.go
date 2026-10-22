@@ -485,9 +485,14 @@ func (s *Store) ChainHeads() (map[string]string, error) {
 	return heads, nil
 }
 
+// maxLine is the longest stored line without its newline: a record is at most 4 MiB.
+const maxLine = 4 << 20
+
 // readLines decodes a data file (a concatenation of zstd frames) and calls fn on each line
-// without its newline. A truncated last frame ends the read (storage-format, "Data files").
-func readLines(path string, fn func(line []byte) error) (sha string, n int, err error) {
+// without its newline. Lenient (an open day being written): a truncated last frame ends the
+// read (storage-format, "Data files"). Strict (a seal, a sealed day): it is an error, and so is
+// a last line without its newline.
+func readLines(path string, strict bool, fn func(line []byte) error) (sha string, n int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
@@ -516,17 +521,23 @@ func readLines(path string, fn func(line []byte) error) (sha string, n int, err 
 			n++
 			rest = rest[i+1:]
 		}
-		if rerr == io.EOF || errors.Is(rerr, io.ErrUnexpectedEOF) {
+		if len(rest) > maxLine {
+			return "", n, fmt.Errorf("line %d: over %d bytes without a newline", n+1, maxLine)
+		}
+		if rerr == io.EOF || !strict && errors.Is(rerr, io.ErrUnexpectedEOF) {
 			break
 		}
 		if rerr != nil {
 			return "", n, rerr
 		}
 	}
+	if strict && len(rest) > 0 {
+		return "", n, fmt.Errorf("line %d: no final newline", n+1)
+	}
 	return h.hex(), n, nil
 }
 
-// envelope is what the store reads back from a stored record.
+// envelope is what the store reads back from a stored record (parseEnvelope).
 type envelope struct {
 	Ts      string          `json:"ts"`
 	Event   string          `json:"event"`
@@ -537,6 +548,24 @@ type envelope struct {
 }
 
 func (e envelope) seq() (uint64, error) { return strconv.ParseUint(string(e.Seq), 10, 64) }
+
+// parseEnvelope reads the envelope members by their exact names: encoding/json's struct
+// decoding also matches `TS` or `Seq`, which are free service fields (log-schema).
+func parseEnvelope(line []byte) (e envelope, err error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(line, &m); err != nil {
+		return e, err
+	}
+	for k, p := range map[string]*string{"ts": &e.Ts, "event": &e.Event, "service": &e.Service, "stream": &e.Stream, "node": &e.Node} {
+		if v, ok := m[k]; ok {
+			if err := json.Unmarshal(v, p); err != nil {
+				return e, fmt.Errorf("%s: %w", k, err)
+			}
+		}
+	}
+	e.Seq = m["seq"]
+	return e, nil
+}
 
 // ParseTime accepts the schema's ts format, RFC 3339, or an offset such as -1h from now.
 func ParseTime(s string, now time.Time) (time.Time, error) {

@@ -60,7 +60,7 @@ func lines(t *testing.T, root, node string) (out []string, days []string) {
 		if f.node != node {
 			continue
 		}
-		if _, _, err := readLines(f.path, func(l []byte) error { out = append(out, string(l)); days = append(days, f.day); return nil }); err != nil {
+		if _, _, err := readLines(f.path, false, func(l []byte) error { out = append(out, string(l)); days = append(days, f.day); return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,8 +71,8 @@ func seqs(t *testing.T, root, node string) []uint64 {
 	var out []uint64
 	ls, _ := lines(t, root, node)
 	for _, l := range ls {
-		var e envelope
-		if err := json.Unmarshal([]byte(l), &e); err != nil {
+		e, err := parseEnvelope([]byte(l))
+		if err != nil {
 			t.Fatal(err)
 		}
 		if e.Stream == streamA {
@@ -388,7 +388,7 @@ func TestSealChainRetentionRead(t *testing.T) {
 	if m.Day != "2026-10-19" || m.Records != 10 || m.PrevDay != nil || m.Services["annai"] != 10 || len(m.Streams) != 1 || m.Streams[0].LastSeq != 10 || m.MinTs != "2026-10-19T08:00:01.000000000Z" || m.MaxTs != "2026-10-19T08:00:10.000000000Z" {
 		t.Errorf("manifest %+v", m)
 	}
-	sha, n, _ := readLines(s.dataPath("node-a", "2026-10-19"), func([]byte) error { return nil })
+	sha, n, _ := readLines(s.dataPath("node-a", "2026-10-19"), true, func([]byte) error { return nil })
 	if sha != m.ContentSha256 || n != 10 {
 		t.Errorf("content hash %s/%d vs manifest %s/%d", sha, n, m.ContentSha256, m.Records)
 	}
@@ -467,5 +467,107 @@ func TestParseTime(t *testing.T) {
 	}
 	if _, err := ParseTime("yesterday", now); err == nil {
 		t.Error("accepted garbage")
+	}
+}
+
+// Free service fields named like envelope members (`TS`, `SEQ`, …) never change the envelope a
+// seal, a read or verify sees (encoding/json matches struct fields case-insensitively).
+func TestEnvelopeExactNames(t *testing.T) {
+	root := t.TempDir()
+	c := &clock{day0}
+	s := open(t, root, c)
+	b := batch(1, 2)
+	b.Records[1] = bytes.Replace(b.Records[1], []byte(`,"qname"`), []byte(`,"TS":"2099-01-01T00:00:00.000000000Z","SEQ":{},"SERVICE":"x","STREAM":"`+strings.Repeat("f", 32)+`","qname"`), 1)
+	if reason := logschema.Record(b.Records[1]); reason != "" {
+		t.Fatal(reason)
+	}
+	if _, err := s.Push(b); err != nil {
+		t.Fatal(err)
+	}
+	c.t = day0.AddDate(0, 0, 1)
+	if _, errs := s.SealPast(); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	ms, _ := manifests(filepath.Join(root, "node-a"))
+	if m := ms[0]; m.MaxTs != "2026-10-19T08:00:02.000000000Z" || fmt.Sprint(m.Services) != "map[annai:2]" || fmt.Sprint(m.Streams) != "[{"+streamA+" 1 2}]" {
+		t.Errorf("manifest %+v", m)
+	}
+	var out bytes.Buffer
+	if err := Read(root, Query{Node: "node-a", Service: "annai", From: day0.Add(-5 * time.Hour), To: day0}, &out); err != nil || strings.Count(out.String(), "\n") != 2 {
+		t.Errorf("read: %v %s", err, out.String())
+	}
+	if err := Verify(root, os.Stderr); err != nil {
+		t.Error(err)
+	}
+}
+
+// Verify reads sealed days strictly: a trailing partial frame, a manifest whose day is not its
+// file's, an unreadable node directory all fail it. A line over 4 MiB is an error, not memory.
+func TestVerifyStrict(t *testing.T) {
+	setup := func() (string, *Store) {
+		root := t.TempDir()
+		c := &clock{day0}
+		s := open(t, root, c)
+		s.Push(batch(1, 5))
+		c.t = day0.AddDate(0, 0, 1)
+		s.SealPast()
+		if err := Verify(root, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		return root, s
+	}
+	for name, damage := range map[string]func(s *Store){
+		"partial frame": func(s *Store) {
+			f, _ := os.OpenFile(s.dataPath("node-a", "2026-10-19"), os.O_APPEND|os.O_WRONLY, 0)
+			f.Write([]byte{0x28, 0xb5})
+			f.Close()
+		},
+		"manifest day": func(s *Store) {
+			p := s.manifestPath("node-a", "2026-10-19")
+			b, _ := os.ReadFile(p)
+			os.WriteFile(p, bytes.Replace(b, []byte(`"day":"2026-10-19"`), []byte(`"day":"2026-10-18"`), 1), 0o640)
+		},
+		"unreadable": func(s *Store) {
+			if os.Geteuid() == 0 {
+				t.Skip("root reads anything")
+			}
+			os.Chmod(filepath.Join(s.root, "node-a"), 0)
+		},
+		"long line": func(s *Store) {
+			os.WriteFile(s.dataPath("node-a", "2026-10-20"), s.enc.EncodeAll(bytes.Repeat([]byte("a"), maxLine+1), nil), 0o640)
+		},
+	} {
+		root, s := setup()
+		damage(s)
+		if err := Verify(root, &bytes.Buffer{}); err == nil {
+			t.Errorf("%s: verify passed", name)
+		}
+		os.Chmod(filepath.Join(root, "node-a"), 0o750)
+	}
+}
+
+// A seal source whose committed content ends with a partial frame is not sealed, and stays.
+func TestSealStrictSource(t *testing.T) {
+	root := t.TempDir()
+	c := &clock{day0}
+	s := open(t, root, c)
+	s.Push(batch(1, 5))
+	p := s.dataPath("node-a", "2026-10-19")
+	frame := s.enc.EncodeAll(record(6), nil)
+	f, _ := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	f.Write(frame[:len(frame)-3])
+	f.Close()
+	fi, _ := os.Stat(p)
+	s.st.Days["node-a/2026-10-19"] = fi.Size()
+	var out bytes.Buffer
+	if err := Read(root, Query{Node: "node-a", From: day0.Add(-5 * time.Hour), To: day0}, &out); err != nil || strings.Count(out.String(), "\n") != 5 {
+		t.Errorf("open day not readable: %v", err)
+	}
+	c.t = day0.AddDate(0, 0, 1)
+	if sealed, errs := s.SealPast(); len(sealed) != 0 || len(errs) != 1 {
+		t.Errorf("got %v %v", sealed, errs)
+	}
+	if fi2, _ := os.Stat(p); fi2.Size() != fi.Size() {
+		t.Error("file changed")
 	}
 }

@@ -126,9 +126,9 @@ func (s *Store) seal(f dataFile) error {
 		out.Close()
 		return err
 	}
-	sha, n, err := readLines(f.path, func(line []byte) error {
-		var e envelope
-		if err := json.Unmarshal(line, &e); err != nil {
+	sha, n, err := readLines(f.path, true, func(line []byte) error {
+		e, err := parseEnvelope(line)
+		if err != nil {
 			return fmt.Errorf("record %d: %w", m.Records+1, err)
 		}
 		seq, err := e.seq()
@@ -172,7 +172,7 @@ func (s *Store) seal(f dataFile) error {
 		return err
 	}
 	// Decompress the recompressed file and compare before replacing the original.
-	if sha2, _, err := readLines(tmp, func([]byte) error { return nil }); err != nil {
+	if sha2, _, err := readLines(tmp, true, func([]byte) error { return nil }); err != nil {
 		return err
 	} else if sha2 != sha {
 		return fmt.Errorf("recompressed content hash %s != %s", sha2, sha)
@@ -252,14 +252,20 @@ func Verify(root string, w io.Writer) error {
 		bad("%s: FORMAT missing or unknown", root)
 	}
 	seqs := map[string][]uint64{}
+	type content struct {
+		sha string
+		n   int
+		err error
+	}
+	contents := map[string]content{} // data path -> what one read of it found
 	files, err := s.dataFiles()
 	if err != nil {
 		bad("%v", err)
 	}
 	for _, f := range files {
-		_, _, err := readLines(f.path, func(line []byte) error {
-			var e envelope
-			if err := json.Unmarshal(line, &e); err != nil {
+		sha, n, err := readLines(f.path, f.sealed, func(line []byte) error {
+			e, err := parseEnvelope(line)
+			if err != nil {
 				return err
 			}
 			seq, err := e.seq()
@@ -272,6 +278,7 @@ func Verify(root string, w io.Writer) error {
 		if err != nil {
 			bad("%s: %v", f.path, err)
 		}
+		contents[f.path] = content{sha, n, err}
 	}
 	for stream, list := range seqs {
 		sort.Slice(list, func(i, j int) bool { return list[i] < list[j] })
@@ -292,18 +299,19 @@ func Verify(root string, w io.Writer) error {
 			continue
 		}
 		for i, m := range ms {
-			if m.Node != node || m.V != 1 {
-				bad("%s: node or version mismatch", m.path)
+			day := strings.TrimSuffix(filepath.Base(m.path), ".manifest.json")
+			if m.Node != node || m.V != 1 || m.Day != day {
+				bad("%s: node, version or day mismatch", m.path)
 			}
-			if _, err := os.Stat(s.dataPath(node, m.Day)); err == nil {
-				sha, n, err := readLines(s.dataPath(node, m.Day), func([]byte) error { return nil })
-				if err != nil {
-					bad("%s: %v", s.dataPath(node, m.Day), err)
-				} else if sha != m.ContentSha256 {
-					bad("%s: content_sha256 %s, data file %s", m.path, m.ContentSha256, sha)
-				} else if n != m.Records {
-					bad("%s: records %d, data file %d", m.path, m.Records, n)
+			// A missing data file is retention (storage-format); any other error is a problem.
+			if c, ok := contents[s.dataPath(node, day)]; ok {
+				if c.err == nil && c.sha != m.ContentSha256 {
+					bad("%s: content_sha256 %s, data file %s", m.path, m.ContentSha256, c.sha)
+				} else if c.err == nil && c.n != m.Records {
+					bad("%s: records %d, data file %d", m.path, m.Records, c.n)
 				}
+			} else if _, err := exists(s.dataPath(node, day)); err != nil {
+				bad("%v", err)
 			}
 			if i == 0 {
 				if m.PrevDay != nil || m.PrevManifestSha != nil {

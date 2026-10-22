@@ -1,7 +1,6 @@
 package store
 
 import (
-	"encoding/json"
 	"io"
 	"path/filepath"
 	"sort"
@@ -40,9 +39,9 @@ func Read(root string, q Query, w io.Writer) error {
 		if m, ok := byDay[f.day]; ok && (m.MaxTs < from || m.MinTs > to) {
 			continue
 		}
-		if _, _, err := readLines(f.path, func(line []byte) error {
-			var e envelope
-			if err := json.Unmarshal(line, &e); err != nil {
+		if _, _, err := readLines(f.path, false, func(line []byte) error {
+			e, err := parseEnvelope(line)
+			if err != nil {
 				return err
 			}
 			if e.Ts >= from && e.Ts <= to && (q.Service == "" || e.Service == q.Service) && (q.Event == "" || e.Event == q.Event) {

@@ -22,13 +22,16 @@ Enough to read, verify or re-ingest a nisshi store without nisshi's code. ADRs 0
   `zstdcat` decodes it with default limits.
 - Decompressed: NDJSON, UTF-8, one record per line, each line ends with `\n`.
 - Records follow [log-schema](log-schema.md). Readers ignore unknown fields and key order.
+  Member names are case-sensitive: a service field `TS` or `SEQ` is not the envelope's `ts`
+  or `seq`.
 - Each record is the pushed bytes unchanged, with `,"recv_ts":"<commit time>"` inserted before
   the final `}`: the agent's JSON is never re-serialized. A record is at most 4 MiB.
 - `(stream, seq)` is unique across the store.
 - Records written by nisshi itself (`seq-gap`) use `stream` = 32 zeros and nisshi's own `seq`
   counter, and carry `recv_ts` like the others.
 - The open day may end with a partial frame while a write is in progress; a reader stops at a
-  truncated last frame.
+  truncated last frame. A sealed day has none: a partial frame or a last line without its
+  `\n` in a sealed file is corruption, and so is a line over 4 MiB anywhere.
 
 ## Manifest
 
