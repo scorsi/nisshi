@@ -114,7 +114,7 @@ func check(b []byte, record bool) (map[string][]byte, string) {
 	if record && (len(b) < 2 || b[0] != '{' || b[len(b)-1] != '}' || bytes.ContainsAny(b, "\r\n")) {
 		return nil, "framing"
 	}
-	if !json.Valid(b) {
+	if tooDeep(b) || !json.Valid(b) {
 		return nil, "not-json"
 	}
 	obj, order, reason := parseObject(b)
@@ -143,6 +143,35 @@ func check(b []byte, record bool) (map[string][]byte, string) {
 		}
 	}
 	return obj, ""
+}
+
+// maxDepth is the deepest JSON nesting accepted (log-schema.md, "Parser edges"); hikyaku applies the same limit.
+const maxDepth = 64
+
+// tooDeep reports whether b nests objects and arrays deeper than maxDepth. It is a byte scan, run
+// before any decoding, so nothing recurses past maxDepth; on invalid JSON the answer is
+// irrelevant, json.Valid rejects it anyway.
+func tooDeep(b []byte) bool {
+	depth, inStr := 0, false
+	for i := 0; i < len(b); i++ {
+		switch c := b[i]; {
+		case inStr:
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inStr = false
+			}
+		case c == '"':
+			inStr = true
+		case c == '{' || c == '[':
+			if depth++; depth > maxDepth {
+				return true
+			}
+		case c == '}' || c == ']':
+			depth--
+		}
+	}
+	return false
 }
 
 // parseObject returns the top-level members of a single JSON value known to be valid, keys in

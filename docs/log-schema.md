@@ -75,8 +75,9 @@ Parser edges, each fixed by fixture lines:
   `SERVICE` is a free service field, never the envelope's `ts`, `seq` or `service`. It is not
   reserved, it does not duplicate the envelope member, and it does not stand in for a missing
   one (`missing-field:ts` with only `TS`); `qname` and `QNAME` are two fields.
-- Nesting: a line nested up to 10 000 levels deep (the top-level object is level 1, each object
-  or array inside it one more) is valid JSON text; deeper is `not-json`.
+- Nesting: a line nested up to 64 levels deep (the top-level object is level 1, each object
+  or array inside it one more) is valid JSON text; level 65 is `not-json`. Every implementation
+  applies the same limit, which keeps the stack bounded.
 - Numbers outside `v` and `seq` are checked for JSON syntax only: any magnitude or precision is
   valid (`1e10000`, a 400-digit integer), and the store keeps the digits as written. In `v` and
   `seq` the same numbers are `v-format` and `seq-format`.
