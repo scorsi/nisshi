@@ -33,3 +33,22 @@ data at once. Volume: a few MB a day after compression.
 - A query on an event range may open later receive days (late deliveries); manifests keep it
   cheap.
 - The open day has no manifest: `nisshi read` scans it fully.
+
+## Amendment — 2026-10-22 (accepted, owner decision)
+
+Review findings: nisshi review §2.2, §2.4, §2.11, §3.5; cross review §2.1.
+
+- **Durability and recovery**: a new day file also syncs its node directory and the root.
+  At start, a committed length whose file is missing or shorter, an unreadable directory, or an
+  invalid `state.json` stops the writer before any change: acknowledged data was lost and an
+  operator decides; nothing is "repaired" by extending a file. One writer per root, held by an
+  exclusive `flock` on the root directory.
+- **Restore**: `state.json` is not backed up. Backups hold the sealed days with their manifests
+  and, twice a day (RPO about 12 hours), the committed prefix of each open day file as
+  `<node>/<day>.ndjson.zst.partial`. The procedure (empty data directory, copy, rename each
+  `.partial` to `.ndjson.zst`, start) is in [storage-format](../storage-format.md),
+  "Restore". Without `state.json`, nisshi rebuilds each stream's `hwm` and owner (0014) and
+  its own `seq` from the files, checking sealed days against their manifests and keeping open
+  days open, so a restored store neither stores a backed-up record twice nor reuses one of its
+  own `seq-gap` numbers. A day file without manifest and unknown to an existing `state.json`
+  is still truncated to zero: restoring files under a stale state is not a restore.

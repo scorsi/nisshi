@@ -71,6 +71,7 @@ type Store struct {
 	mu      sync.Mutex
 	st      state
 	enc     *zstd.Encoder
+	rebuilt int // streams rebuilt from the files at Open (restore), -1 when state.json existed
 	// broken stops every push once the files may no longer match the state in memory (a state
 	// write that may have been published, a failed rollback); a restart recovers from disk.
 	broken error
@@ -132,7 +133,9 @@ func (s *Store) load() error {
 	} else if string(b) != formatLine {
 		return fmt.Errorf("%s: unknown format %q", fp, bytes.TrimSpace(b))
 	}
-	if b, err := os.ReadFile(filepath.Join(s.root, "state.json")); err == nil {
+	s.rebuilt = -1
+	b, err := os.ReadFile(filepath.Join(s.root, "state.json"))
+	if err == nil {
 		if err := json.Unmarshal(b, &s.st); err != nil {
 			return fmt.Errorf("state.json: %w", err)
 		}
@@ -147,9 +150,13 @@ func (s *Store) load() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	var err error
 	if s.enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(windowSize)); err != nil {
 		return err
+	}
+	if b == nil {
+		if err := s.rebuild(); err != nil {
+			return fmt.Errorf("restore: %w", err)
+		}
 	}
 	return s.recover()
 }
@@ -549,6 +556,10 @@ func readLines(path string, strict bool, fn func(line []byte) error) (sha string
 		return "", 0, err
 	}
 	defer f.Close()
+	return readFrom(f, strict, fn)
+}
+
+func readFrom(f io.Reader, strict bool, fn func(line []byte) error) (sha string, n int, err error) {
 	dec, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxWindow(windowSize))
 	if err != nil {
 		return "", 0, err

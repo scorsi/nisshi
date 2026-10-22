@@ -643,3 +643,78 @@ func TestClockBackOnSealedDay(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A store restored from its backup (sealed days with their manifests, the committed prefix of
+// the open day as `.partial` renamed, no state.json) rebuilds hwm, owners and its own seq, and
+// keeps the open day open (storage-format, "Restore").
+func TestRestore(t *testing.T) {
+	src := t.TempDir()
+	c := &clock{day0}
+	s := open(t, src, c)
+	s.Push(batch(1, 10))
+	s.Push(batch(21, 5)) // gap 11-20: nisshi's seq 1
+	c.t = day0.AddDate(0, 0, 1)
+	s.Push(batch(26, 5))
+	b := batch(1, 3)
+	b.Node, b.Stream = "node-b", strings.Repeat("b", 32)
+	for i, rec := range b.Records {
+		b.Records[i] = bytes.ReplaceAll(bytes.ReplaceAll(rec, []byte(streamA), []byte(b.Stream)), []byte("node-a"), []byte("node-b"))
+	}
+	s.Push(b)
+	s.SealPast()
+	backup := func(tail []byte) string {
+		dst := t.TempDir()
+		files, _ := filepath.Glob(filepath.Join(src, "*", "*"))
+		for _, f := range append(files, filepath.Join(src, "FORMAT")) {
+			rel, _ := filepath.Rel(src, f)
+			data, _ := os.ReadFile(f)
+			if n, open := s.st.Days[filepath.Dir(rel)+"/"+strings.TrimSuffix(filepath.Base(rel), ".ndjson.zst")]; open {
+				data = append(data[:n:n], tail...) // the .partial copy, renamed back
+			}
+			os.MkdirAll(filepath.Join(dst, filepath.Dir(rel)), 0o750)
+			os.WriteFile(filepath.Join(dst, rel), data, 0o640)
+		}
+		return dst
+	}
+	for name, tail := range map[string][]byte{"exact": nil, "truncated tail": s.enc.EncodeAll(record(31), nil)[:20]} {
+		root := backup(tail)
+		r := open(t, root, c)
+		if n, ok := r.Rebuilt(); !ok || n != 2 {
+			t.Errorf("%s: rebuilt %d %v", name, n, ok)
+		}
+		if st := r.Streams()[streamA]; st.Hwm != 30 || st.Node != "node-a" || r.st.OwnSeq != 1 {
+			t.Errorf("%s: %+v own %d", name, st, r.st.OwnSeq)
+		}
+		if _, ok := r.st.Days["node-a/2026-10-20"]; !ok {
+			t.Errorf("%s: open day not kept open", name)
+		}
+		if res, err := r.Push(batch(26, 5)); err != nil || res.Stored != 0 {
+			t.Errorf("%s: resend stored again: %+v %v", name, res, err)
+		}
+		if res, err := r.Push(batch(41, 1)); err != nil || !res.Gap {
+			t.Errorf("%s: gap push: %+v %v", name, res, err)
+		}
+		other := batch(42, 1)
+		other.Node = "node-b"
+		if _, err := r.Push(other); !errors.Is(err, ErrStreamOwner) {
+			t.Errorf("%s: owner lost: %v", name, err)
+		}
+		c.t = day0.AddDate(0, 0, 2)
+		if _, errs := r.SealPast(); len(errs) != 0 {
+			t.Error(errs)
+		}
+		if err := Verify(root, os.Stderr); err != nil { // no duplicate (stream, seq), own seq included
+			t.Errorf("%s: %v", name, err)
+		}
+		c.t = day0.AddDate(0, 0, 1)
+	}
+	// A manifest whose stream ranges do not match its data stops the start.
+	root := backup(nil)
+	p := filepath.Join(root, "node-a", "2026-10-19.manifest.json")
+	m, _ := os.ReadFile(p)
+	os.WriteFile(p, bytes.Replace(m, []byte(`"last_seq":25`), []byte(`"last_seq":24`), 1), 0o640)
+	if r, err := Open(root, 0, c.now); err == nil {
+		r.Close()
+		t.Error("opened with a tampered manifest")
+	}
+}

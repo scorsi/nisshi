@@ -35,7 +35,10 @@ curl -s --cacert nisshi-ca.pem -H "Authorization: Bearer $(cat reader-token)" \
 
 A node whose last receive is minutes old while its agent should be pushing is silent; the
 agent's `heartbeat` events (every 5 minutes) make that true for logs too. `.agents` shows each
-agent's spool state (`paused`, oldest unacked record).
+agent's spool state (`paused`, oldest unacked record) **as of its last successful push**: it
+is refreshed only by a push that nisshi accepted, and lost when nisshi restarts. Read it
+together with the node's last receive time, never as a live probe of the agent. After a
+restore, `lastReceiveNs` is 0 until the stream's next push.
 
 ## Documents
 

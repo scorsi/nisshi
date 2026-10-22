@@ -169,6 +169,9 @@ func newServer(cfg Config, log *slog.Logger, now func() time.Time) (*Server, err
 	if err != nil {
 		return nil, err
 	}
+	if n, ok := st.Rebuilt(); ok {
+		log.Info("", "event", "restore", "streams", n)
+	}
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxDecompressed))
 	if err != nil {
 		return nil, err

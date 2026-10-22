@@ -70,6 +70,33 @@ At start, each open day file is truncated to its committed length; a day file ab
 missing or shorter is acknowledged data lost: the writer refuses to start and changes nothing.
 One writer per root: it holds an exclusive `flock` on the root directory.
 
+## Restore (writer)
+
+A backup holds the sealed days with their manifests, and, taken twice a day by the deployment,
+the committed prefix of each open day file (its length in `state.json`) as
+`<node>/<YYYY-MM-DD>.ndjson.zst.partial`. `state.json` is never backed up: it may name open
+data the backup does not hold.
+
+1. Stop nisshi; start from an **empty** data directory.
+2. Copy `FORMAT`, every `<node>/<day>.ndjson.zst` and `<node>/<day>.manifest.json`, and every
+   `.partial` file of the backup into it.
+3. Rename each `<day>.ndjson.zst.partial` to `<day>.ndjson.zst`.
+4. Start nisshi.
+
+At start without `state.json`, the writer rebuilds its state from the files before accepting
+pushes, and logs one `restore` event:
+
+- each sealed day is checked against its manifest (content hash, record count, stream ranges)
+  when its data file exists; a mismatch stops the start;
+- each open day (no manifest) keeps its complete frames, a truncated last frame is cut, and the
+  day stays open;
+- each stream's `hwm` is its highest `seq` found, its owner the node directory it was found in
+  (a stream in two node directories stops the start), nisshi's own `seq` the highest `seq` of
+  the `seq-gap` records.
+
+Records received after the backup are lost; agents whose spool still holds them resend them
+(`first_seq > hwm + 1` is a reported gap, ADR 0003). Agents may resume as soon as nisshi is up.
+
 ## Reading and verifying with standard tools
 
 ```sh
