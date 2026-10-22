@@ -95,12 +95,12 @@ func push(t *testing.T, url string, o pushOpts) (int, *nisshiv1.PushResponse, *n
 		var pr nisshiv1.PushResponse
 		proto.Unmarshal(b, &pr)
 		return 200, &pr, nil
-	case 400:
+	case 400, 403:
 		var rj nisshiv1.PushRejected
 		if err := proto.Unmarshal(b, &rj); err != nil {
 			t.Fatal(err)
 		}
-		return 400, nil, &rj
+		return resp.StatusCode, nil, &rj
 	}
 	return resp.StatusCode, nil, nil
 }
@@ -146,6 +146,11 @@ func TestResponseTable(t *testing.T) {
 		{"overlap", pushOpts{first: 6, records: records("node-a", 6, 10)}, 200, 15, nil, ""},
 		{"gap", pushOpts{first: 21, records: records("node-a", 21, 5)}, 200, 25, nil, ""},
 		{"upper-case encoding", pushOpts{first: 26, records: records("node-a", 26, 1), encoding: "ZSTD"}, 200, 26, nil, ""},
+		// ADR 0014: the stream is node-a's; request checks first, then the owner, then records.
+		{"another node's stream", pushOpts{token: "tok-b", node: "node-b", first: 27, records: records("node-b", 27, 1)}, 403, 0, nil, "stream-owner"},
+		{"owner before records", pushOpts{token: "tok-b", node: "node-b", first: 27, records: [][]byte{[]byte("x")}}, 403, 0, nil, "stream-owner"},
+		{"request before owner", pushOpts{token: "tok-b", node: "node-b", first: 0, records: records("node-b", 27, 1)}, 400, 0, nil, "first-seq-zero"},
+		{"reserved stream", pushOpts{streamID: make([]byte, 16), first: 1, records: [][]byte{bytes.ReplaceAll(record("node-a", 1, ""), []byte(streamHex), []byte(strings.Repeat("0", 32)))}}, 403, 0, nil, "stream-owner"},
 	} {
 		code, pr, rj := push(t, ts.URL, tc.o)
 		if code != tc.code {
@@ -210,7 +215,7 @@ func TestResponseTable(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	s.serveMetrics(rec2, httptest.NewRequest("GET", "/metrics", nil))
 	m := rec2.Body.String()
-	for _, want := range []string{`nisshi_records_total{source_node="node-a"} 21`, "nisshi_duplicate_records_total 15", "nisshi_seq_gaps_total 1", `nisshi_push_requests_total{code="200"} 5`, `nisshi_push_requests_total{code="401"} 2`, `nisshi_push_requests_total{code="403"} 2`, `nisshi_seals_total{result="ok"} 0`, "nisshi_disk_free_bytes ", `nisshi_build_info{version="dev"} 1`} {
+	for _, want := range []string{`nisshi_records_total{source_node="node-a"} 21`, "nisshi_duplicate_records_total 15", "nisshi_seq_gaps_total 1", `nisshi_push_requests_total{code="200"} 5`, `nisshi_push_requests_total{code="401"} 2`, `nisshi_push_requests_total{code="403"} 5`, `nisshi_seals_total{result="ok"} 0`, "nisshi_disk_free_bytes ", `nisshi_build_info{version="dev"} 1`} {
 		if !strings.Contains(m, want) {
 			t.Errorf("metrics missing %q in\n%s", want, m)
 		}

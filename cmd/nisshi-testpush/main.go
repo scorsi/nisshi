@@ -305,12 +305,12 @@ func (p *pusher) push(token string, req *nisshiv1.PushRequest) (int, *nisshiv1.P
 			return 0, nil, nil, fmt.Errorf("200 body: %w", err)
 		}
 		return 200, &pr, nil, nil
-	case 400:
+	case 400, 403: // a 403 for the wrong role has no body, a 403 stream-owner has one (ADR 0014)
 		var rj nisshiv1.PushRejected
 		if err := proto.Unmarshal(b, &rj); err != nil {
-			return 0, nil, nil, fmt.Errorf("400 body: %w", err)
+			return 0, nil, nil, fmt.Errorf("%d body: %w", resp.StatusCode, err)
 		}
-		return 400, nil, &rj, nil
+		return resp.StatusCode, nil, &rj, nil
 	}
 	return resp.StatusCode, nil, nil, nil
 }

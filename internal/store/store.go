@@ -34,6 +34,10 @@ const (
 // batch was rolled back (HTTP 507).
 var ErrDisk = errors.New("disk")
 
+// ErrStreamOwner is returned by Push and CheckOwner for a stream that another node pushed first,
+// or for nisshi's own stream (ADR 0014, HTTP 403 `stream-owner`).
+var ErrStreamOwner = errors.New("stream-owner")
+
 // errPublished: the rename of an atomic write happened, the directory sync after it failed. The
 // new file may or may not survive a power loss; the old one is gone from the namespace.
 var errPublished = errors.New("published, directory sync failed")
@@ -278,6 +282,9 @@ func (s *Store) Push(b Batch) (Result, error) {
 	if s.broken != nil {
 		return Result{}, fmt.Errorf("writer stopped until restart: %w", s.broken)
 	}
+	if err := s.checkOwner(b.Node, b.Stream); err != nil {
+		return Result{}, err
+	}
 	old := s.st.Streams[b.Stream]
 	st := old
 	if st == nil {
@@ -359,6 +366,21 @@ func (s *Store) Push(b Batch) (Result, error) {
 	}
 	r.Acked = ns.Hwm
 	return r, nil
+}
+
+// CheckOwner refuses a stream that another node pushed first, and nisshi's own stream (ADR
+// 0014). Push checks again under the same lock: two first pushes may race.
+func (s *Store) CheckOwner(node, stream string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkOwner(node, stream)
+}
+
+func (s *Store) checkOwner(node, stream string) error {
+	if st := s.st.Streams[stream]; stream == GapStream || st != nil && st.Node != node {
+		return ErrStreamOwner
+	}
+	return nil
 }
 
 // rollback cuts a day file back to its committed length after a failed commit. If that fails

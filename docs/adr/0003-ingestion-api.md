@@ -1,7 +1,8 @@
 # ADR 0003 — Ingestion API and delivery semantics
 
 Status: Accepted — 2026-10-19
-Superseded in part by [0013](0013-forbidden-for-wrong-role.md) (403 for a valid token of the wrong role).
+Superseded in part by [0013](0013-forbidden-for-wrong-role.md) (403 for a valid token of the wrong role)
+and [0014](0014-stream-owner.md) (403 `stream-owner`).
 
 ## Context
 
@@ -36,6 +37,7 @@ each object (storage-format, "Records"). The agent already wrote `node`, `stream
 | no or bad credentials | nothing | 401 |
 | a record invalid: not a JSON object, envelope invalid under the published rules (0004), a store field present (`recv_ts`), `node`/`stream`/`seq` not matching the request | nothing (whole batch) | 400, `PushRejected{record_index, reason}` of the first invalid record |
 | the request itself invalid: `node` ≠ authenticated node, malformed `stream_id`, `first_seq` = 0 | nothing | 400, `PushRejected{reason}` without index |
+| the stream was first pushed by another node, or is nisshi's reserved stream (0014) | nothing | 403, `PushRejected{reason: "stream-owner"}` without index |
 | free space below `disk_reserve`, or a write error | rolls back to last commit | 507 |
 | body too large | nothing | 413 |
 

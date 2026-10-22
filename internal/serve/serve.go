@@ -244,11 +244,21 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 }
 
 func reject(w http.ResponseWriter, index *uint32, reason string) int {
+	return refuse(w, http.StatusBadRequest, index, reason)
+}
+
+func refuse(w http.ResponseWriter, code int, index *uint32, reason string) int {
 	b, _ := proto.Marshal(&nisshiv1.PushRejected{RecordIndex: index, Reason: reason})
 	w.Header().Set("Content-Type", "application/x-protobuf")
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(code)
 	w.Write(b)
-	return http.StatusBadRequest
+	return code
+}
+
+// forbidStream answers a push to a stream the node does not own (ADR 0014).
+func (s *Server) forbidStream(w http.ResponseWriter, node, stream string) int {
+	s.log.Warn("", "event", "stream-owner", "source_node", node, "stream_id", stream)
+	return refuse(w, http.StatusForbidden, nil, "stream-owner")
 }
 
 // deny answers a request whose identity lacks the endpoint's role: 401 without a known token,
@@ -302,6 +312,9 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 		return reject(w, nil, "first-seq-zero")
 	}
 	stream := hex.EncodeToString(req.StreamId)
+	if err := s.st.CheckOwner(node, stream); err != nil {
+		return s.forbidStream(w, node, stream)
+	}
 	b := store.Batch{Node: node, Stream: stream, FirstSeq: req.FirstSeq, Records: req.Records}
 	for i, rec := range req.Records {
 		f, reason := logschema.RecordFields(rec)
@@ -323,6 +336,9 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 		}
 	}
 	res, err := s.st.Push(b)
+	if errors.Is(err, store.ErrStreamOwner) {
+		return s.forbidStream(w, node, stream)
+	}
 	if err != nil {
 		s.log.Error("", "event", "push-failed", "source_node", node, "err", err.Error())
 		if errors.Is(err, store.ErrDisk) {

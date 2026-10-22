@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -569,5 +570,42 @@ func TestSealStrictSource(t *testing.T) {
 	}
 	if fi2, _ := os.Stat(p); fi2.Size() != fi.Size() {
 		t.Error("file changed")
+	}
+}
+
+// A stream belongs to the node that first pushed it, across restarts; nisshi's own stream to
+// no agent (ADR 0014). Two racing first pushes: one wins.
+func TestStreamOwner(t *testing.T) {
+	root := t.TempDir()
+	c := &clock{day0}
+	s := open(t, root, c)
+	s.Push(batch(1, 10))
+	other := batch(11, 10)
+	other.Node = "node-b"
+	gap := batch(1, 1)
+	gap.Stream = GapStream
+	for _, b := range []Batch{other, gap} {
+		if _, err := s.Push(b); !errors.Is(err, ErrStreamOwner) {
+			t.Errorf("%s/%s: %v", b.Node, b.Stream, err)
+		}
+	}
+	s = open(t, root, c)
+	if _, err := s.Push(other); !errors.Is(err, ErrStreamOwner) {
+		t.Errorf("after restart: %v", err)
+	}
+	if r, err := s.Push(batch(11, 10)); err != nil || r.Stored != 10 || r.Acked != 20 {
+		t.Errorf("owner: %+v %v", r, err)
+	}
+	if got := seqs(t, root, "node-a"); len(got) != 20 {
+		t.Errorf("%d records", len(got))
+	}
+	errs := make(chan error, 2)
+	for _, node := range []string{"node-a", "node-b"} {
+		b := batch(1, 1)
+		b.Node, b.Stream = node, strings.Repeat("c", 32)
+		go func() { _, err := s.Push(b); errs <- err }()
+	}
+	if e1, e2 := <-errs, <-errs; (e1 == nil) == (e2 == nil) {
+		t.Errorf("racing first pushes: %v, %v", e1, e2)
 	}
 }
