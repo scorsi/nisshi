@@ -287,7 +287,9 @@ func TestOneWriter(t *testing.T) {
 }
 
 // A seal stopped at any step leaves the day sealed or open, never a file that recovery cuts to
-// the length of its other representation (several frames make the two lengths differ).
+// the length of its other representation (several frames make the two lengths differ). The
+// process goes on without a restart: once the manifest is published the day refuses pushes
+// although it is still in the state's open days (validation R1), and the next seal and push work.
 func TestSealCrash(t *testing.T) {
 	for _, step := range []string{"tmp", "rename", "seal-rename"} {
 		root := t.TempDir()
@@ -301,14 +303,32 @@ func TestSealCrash(t *testing.T) {
 		if sealed, errs := s.SealPast(); len(sealed) != 0 || len(errs) != 1 {
 			t.Fatalf("%s: crash not injected: %v %v", step, sealed, errs)
 		}
-		s = open(t, root, c)
-		if sealed, errs := s.SealPast(); len(errs) != 0 || (step == "tmp") != (len(sealed) == 1) {
-			t.Errorf("%s: reseal: %v %v", step, sealed, errs)
+		s.crash = nil
+		published := step != "tmp"
+		c.t = day0
+		_, err := s.Push(batch(51, 5))
+		if published != errors.Is(err, ErrSealedDay) {
+			t.Errorf("%s: push on the day just sealed: %v", step, err)
 		}
+		want := uint64(50)
+		if !published {
+			want = 55
+		}
+		c.t = day0.AddDate(0, 0, 1)
+		if sealed, errs := s.SealPast(); len(errs) != 0 || published == (len(sealed) == 1) {
+			t.Errorf("%s: seal again: %v %v", step, sealed, errs)
+		}
+		if r, err := s.Push(batch(want+1, 5)); err != nil || r.Acked != want+5 {
+			t.Errorf("%s: push the next day: %+v %v", step, r, err)
+		}
+		if err := Verify(root, os.Stderr); err != nil {
+			t.Errorf("%s: before restart: %v", step, err)
+		}
+		s = open(t, root, c)
 		if _, ok := s.st.Days["node-a/2026-10-19"]; ok {
 			t.Errorf("%s: sealed day still open in the state", step)
 		}
-		if got := seqs(t, root, "node-a"); len(got) != 50 || got[49] != 50 {
+		if got := seqs(t, root, "node-a"); uint64(len(got)) != want+5 || got[len(got)-1] != want+5 {
 			t.Errorf("%s: %d records after the seal", step, len(got))
 		}
 		if err := Verify(root, os.Stderr); err != nil {

@@ -345,15 +345,14 @@ func (s *Store) Push(b Batch) (Result, error) {
 	}
 	day := now.Format("2006-01-02")
 	key := b.Node + "/" + day
-	committed, open := s.st.Days[key]
-	if !open {
-		last, err := s.sealedThrough(b.Node)
-		if err != nil {
-			return r, err
-		}
-		if day <= last {
-			return r, fmt.Errorf("%w: %s, %s sealed through %s: store clock behind?", ErrSealedDay, day, b.Node, last)
-		}
+	committed := s.st.Days[key]
+	// Even for a day still in Days: a seal that failed after publishing its manifest leaves it there.
+	last, err := s.sealedThrough(b.Node)
+	if err != nil {
+		return r, err
+	}
+	if day <= last {
+		return r, fmt.Errorf("%w: %s, %s sealed through %s: store clock behind?", ErrSealedDay, day, b.Node, last)
 	}
 	free, err := s.FreeBytes()
 	if err != nil {
