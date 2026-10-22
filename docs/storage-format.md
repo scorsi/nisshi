@@ -56,13 +56,16 @@ Enough to read, verify or re-ingest a nisshi store without nisshi's code. ADRs 0
 
 ## Commit (writer)
 
-1. Append the new frames to the day file, `fsync`.
+1. Append the new frames to the day file, `fsync` (a new day file: also `fsync` its node
+   directory and the root).
 2. Write `state.json.tmp` (committed length of each open day file, `hwm` and last times per
    stream, nisshi's own `seq`), `fsync`, rename over `state.json`, `fsync` the directory.
 3. Only then answer 200.
 
 At start, each open day file is truncated to its committed length; a day file absent from
-`state.json` and without a manifest is truncated to zero.
+`state.json` and without a manifest is truncated to zero. A committed length whose file is
+missing or shorter is acknowledged data lost: the writer refuses to start and changes nothing.
+One writer per root: it holds an exclusive `flock` on the root directory.
 
 ## Reading and verifying with standard tools
 

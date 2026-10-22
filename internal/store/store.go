@@ -34,6 +34,10 @@ const (
 // batch was rolled back (HTTP 507).
 var ErrDisk = errors.New("disk")
 
+// errPublished: the rename of an atomic write happened, the directory sync after it failed. The
+// new file may or may not survive a power loss; the old one is gone from the namespace.
+var errPublished = errors.New("published, directory sync failed")
+
 // Stream is the writer state of one agent stream.
 type Stream struct {
 	Node          string `json:"node"`
@@ -49,14 +53,18 @@ type state struct {
 	OwnSeq  uint64             `json:"own_seq"`
 }
 
-// Store is an open store root; one process writes it at a time.
+// Store is an open store root; one process writes it at a time (an exclusive flock on the root).
 type Store struct {
 	root    string
 	reserve uint64
 	now     func() time.Time
+	lock    *os.File
 	mu      sync.Mutex
 	st      state
 	enc     *zstd.Encoder
+	// broken stops every push once the files may no longer match the state in memory (a state
+	// write that may have been published, a failed rollback); a restart recovers from disk.
+	broken error
 	// crash, set by tests, aborts a commit after the named step (ADR 0011).
 	crash func(step string) bool
 }
@@ -84,55 +92,124 @@ func Open(root string, reserve uint64, now func() time.Time) (*Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, err
 	}
-	fp := filepath.Join(root, "FORMAT")
+	lock, err := os.Open(root)
+	if err != nil {
+		return nil, err
+	}
+	// Before any recovery or maintenance: a second writer must not touch the files.
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("%s: another writer holds the store: %w", root, err)
+	}
+	s := &Store{root: root, reserve: reserve, now: now, lock: lock, st: state{V: 1, Days: map[string]int64{}, Streams: map[string]*Stream{}}}
+	if err := s.load(); err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Close releases the writer lock.
+func (s *Store) Close() error { return s.lock.Close() }
+
+func (s *Store) load() error {
+	fp := filepath.Join(s.root, "FORMAT")
 	if b, err := os.ReadFile(fp); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(fp, []byte(formatLine), 0o640); err != nil {
-			return nil, err
+		if err := writeAtomic(fp, []byte(formatLine), nil); err != nil {
+			return err
 		}
 	} else if err != nil {
-		return nil, err
+		return err
 	} else if string(b) != formatLine {
-		return nil, fmt.Errorf("%s: unknown format %q", fp, bytes.TrimSpace(b))
+		return fmt.Errorf("%s: unknown format %q", fp, bytes.TrimSpace(b))
 	}
-	s := &Store{root: root, reserve: reserve, now: now, st: state{V: 1, Days: map[string]int64{}, Streams: map[string]*Stream{}}}
-	if b, err := os.ReadFile(filepath.Join(root, "state.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(s.root, "state.json")); err == nil {
 		if err := json.Unmarshal(b, &s.st); err != nil {
-			return nil, fmt.Errorf("state.json: %w", err)
+			return fmt.Errorf("state.json: %w", err)
+		}
+		if s.st.V != 1 || s.st.Days == nil || s.st.Streams == nil {
+			return fmt.Errorf("state.json: version %d or days/streams missing", s.st.V)
+		}
+		for k, v := range s.st.Streams {
+			if v == nil {
+				return fmt.Errorf("state.json: stream %s is null", k)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return err
 	}
 	var err error
 	if s.enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1), zstd.WithWindowSize(windowSize)); err != nil {
-		return nil, err
+		return err
 	}
-	return s, s.recover()
+	return s.recover()
 }
 
 // recover truncates every open day file to its committed length; a day file without state and
-// without manifest is truncated to zero (storage-format, "Commit").
+// without manifest is truncated to zero (storage-format, "Commit"). A committed length whose file
+// is missing or shorter is lost acknowledged data: Open fails and changes nothing.
 func (s *Store) recover() error {
-	seen := map[string]bool{}
-	for _, f := range s.dataFiles() {
+	files, err := s.dataFiles()
+	if err != nil {
+		return err
+	}
+	byKey := map[string]dataFile{}
+	for _, f := range files {
+		byKey[f.node+"/"+f.day] = f
+	}
+	for key, n := range s.st.Days {
+		f, ok := byKey[key]
+		if ok && f.sealed {
+			continue
+		}
+		node, day, _ := strings.Cut(key, "/")
+		if !ok {
+			if sealed, err := exists(s.manifestPath(node, day)); err != nil || n == 0 || sealed {
+				continue // err: the loop below fails on it
+			}
+			return fmt.Errorf("%s: missing, %d bytes committed", s.dataPath(node, day), n)
+		}
+		fi, err := os.Stat(f.path)
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() || fi.Size() < n {
+			return fmt.Errorf("%s: %d bytes, %d committed", f.path, fi.Size(), n)
+		}
+	}
+	for _, f := range files {
 		key := f.node + "/" + f.day
-		seen[key] = true
 		if f.sealed {
 			delete(s.st.Days, key)
 			continue
 		}
-		if err := os.Truncate(f.path, s.st.Days[key]); err != nil {
+		n := s.st.Days[key] // 0 for a file the state does not know
+		if err := os.Truncate(f.path, n); err != nil {
 			return err
 		}
-		if _, ok := s.st.Days[key]; !ok {
-			s.st.Days[key] = 0
-		}
+		s.st.Days[key] = n
 	}
 	for key := range s.st.Days {
-		if !seen[key] {
+		if _, ok := byKey[key]; !ok {
 			delete(s.st.Days, key)
 		}
 	}
+	// Recompressed files of a seal interrupted before its rename.
+	tmps, _ := filepath.Glob(filepath.Join(s.root, "*", "*.ndjson.zst.tmp"))
+	for _, p := range tmps {
+		if err := os.Remove(p); err != nil {
+			return err
+		}
+	}
 	return s.writeState()
+}
+
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 type dataFile struct {
@@ -141,29 +218,39 @@ type dataFile struct {
 }
 
 // dataFiles lists every data file, sorted by node then day.
-func (s *Store) dataFiles() []dataFile {
+func (s *Store) dataFiles() ([]dataFile, error) {
+	nodes, err := s.nodes()
+	if err != nil {
+		return nil, err
+	}
 	var out []dataFile
-	for _, node := range s.nodes() {
-		entries, _ := os.ReadDir(filepath.Join(s.root, node))
+	for _, node := range nodes {
+		entries, err := os.ReadDir(filepath.Join(s.root, node))
+		if err != nil {
+			return nil, err
+		}
 		for _, e := range entries {
 			if day, ok := strings.CutSuffix(e.Name(), ".ndjson.zst"); ok {
-				_, err := os.Stat(s.manifestPath(node, day))
-				out = append(out, dataFile{node, day, s.dataPath(node, day), err == nil})
+				sealed, err := exists(s.manifestPath(node, day))
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, dataFile{node, day, s.dataPath(node, day), sealed})
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
-func (s *Store) nodes() []string {
-	entries, _ := os.ReadDir(s.root)
+func (s *Store) nodes() ([]string, error) {
+	entries, err := os.ReadDir(s.root)
 	var nodes []string
 	for _, e := range entries {
 		if e.IsDir() {
 			nodes = append(nodes, e.Name())
 		}
 	}
-	return nodes
+	return nodes, err
 }
 
 func (s *Store) dataPath(node, day string) string {
@@ -188,7 +275,11 @@ func (s *Store) FreeBytes() (uint64, error) {
 func (s *Store) Push(b Batch) (Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := s.st.Streams[b.Stream]
+	if s.broken != nil {
+		return Result{}, fmt.Errorf("writer stopped until restart: %w", s.broken)
+	}
+	old := s.st.Streams[b.Stream]
+	st := old
 	if st == nil {
 		st = &Stream{Node: b.Node}
 	}
@@ -210,11 +301,12 @@ func (s *Store) Push(b Batch) (Result, error) {
 	if r.Stored == 0 {
 		return r, nil
 	}
+	ownSeq := s.st.OwnSeq
 	if b.FirstSeq > st.Hwm+1 {
 		r.Gap = true
-		s.st.OwnSeq++
+		ownSeq++
 		fmt.Fprintf(&lines, `{"v":1,"ts":%q,"level":"warn","event":"seq-gap","node":%q,"service":"nisshi","stream":%q,"seq":%d,"gap_stream":%q,"from_seq":%d,"to_seq":%d%s`,
-			ts, b.Node, GapStream, s.st.OwnSeq, b.Stream, st.Hwm+1, b.FirstSeq-1, recv)
+			ts, b.Node, GapStream, ownSeq, b.Stream, st.Hwm+1, b.FirstSeq-1, recv)
 	}
 	free, err := s.FreeBytes()
 	if err != nil {
@@ -228,8 +320,7 @@ func (s *Store) Push(b Batch) (Result, error) {
 	committed := s.st.Days[key]
 	frameLen, err := s.appendFrame(b.Node, day, committed, lines.Bytes())
 	if err != nil {
-		os.Truncate(s.dataPath(b.Node, day), committed)
-		return r, fmt.Errorf("%w: %v", ErrDisk, err)
+		return r, s.rollback(s.dataPath(b.Node, day), committed, err)
 	}
 	if s.crash != nil && s.crash("append") {
 		return r, errors.New("crash after append")
@@ -242,30 +333,53 @@ func (s *Store) Push(b Batch) (Result, error) {
 		ns.LastRecordTs = b.LastTs
 	}
 	prevLen, hadDay := s.st.Days[key]
+	prevOwn := s.st.OwnSeq
 	s.st.Days[key] = committed + frameLen
 	s.st.Streams[b.Stream] = &ns
+	s.st.OwnSeq = ownSeq
 	if err := s.writeState(); err != nil {
+		if errors.Is(err, errPublished) {
+			// state.json may already name the frame: keep both, accept nothing more until a
+			// restart recovers from whichever state survived (old: frame cut; new: frame kept).
+			s.broken = err
+			return r, err
+		}
 		if hadDay {
 			s.st.Days[key] = prevLen
 		} else {
 			delete(s.st.Days, key)
 		}
-		if st.LastReceiveNs == 0 {
+		if old == nil {
 			delete(s.st.Streams, b.Stream)
 		} else {
-			s.st.Streams[b.Stream] = st
+			s.st.Streams[b.Stream] = old
 		}
-		os.Truncate(s.dataPath(b.Node, day), committed)
-		return r, fmt.Errorf("%w: %v", ErrDisk, err)
+		s.st.OwnSeq = prevOwn
+		return r, s.rollback(s.dataPath(b.Node, day), committed, err)
 	}
 	r.Acked = ns.Hwm
 	return r, nil
 }
 
+// rollback cuts a day file back to its committed length after a failed commit. If that fails
+// too, the file's tail is unknown: the writer stops until a restart recovers it.
+func (s *Store) rollback(path string, committed int64, cause error) error {
+	err := os.Truncate(path, committed)
+	if s.crash != nil && s.crash("truncate") {
+		err = errors.New("truncate failed")
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.broken = fmt.Errorf("rollback of %s: %w", path, err)
+		return fmt.Errorf("%w: %v; %v", ErrDisk, cause, s.broken)
+	}
+	return fmt.Errorf("%w: %v", ErrDisk, cause)
+}
+
 // appendFrame writes one zstd frame at the committed length of the day file, fsyncs it and
 // returns the frame's length.
 func (s *Store) appendFrame(node, day string, committed int64, lines []byte) (int64, error) {
-	if err := os.MkdirAll(filepath.Join(s.root, node), 0o750); err != nil {
+	dir := filepath.Join(s.root, node)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return 0, err
 	}
 	f, err := os.OpenFile(s.dataPath(node, day), os.O_CREATE|os.O_WRONLY, 0o640)
@@ -277,7 +391,18 @@ func (s *Store) appendFrame(node, day string, committed int64, lines []byte) (in
 	if _, err := f.WriteAt(frame, committed); err != nil {
 		return 0, err
 	}
-	return int64(len(frame)), f.Sync()
+	if err := f.Sync(); err != nil {
+		return 0, err
+	}
+	if committed == 0 { // maybe a new file in a new directory: make both names durable
+		if err := syncDir(dir); err != nil {
+			return 0, err
+		}
+		if err := syncDir(s.root); err != nil {
+			return 0, err
+		}
+	}
+	return int64(len(frame)), nil
 }
 
 // writeState commits state.json: tmp, fsync, rename, fsync dir.
@@ -312,7 +437,13 @@ func writeAtomic(path string, b []byte, crash func(string) bool) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	if crash != nil && crash("rename") {
+		return fmt.Errorf("%w: crash after rename", errPublished)
+	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%w: %v", errPublished, err)
+	}
+	return nil
 }
 
 func syncDir(dir string) error {
@@ -338,7 +469,11 @@ func (s *Store) Streams() map[string]Stream {
 // ChainHeads is node -> hex SHA-256 of its newest manifest (ADR 0007).
 func (s *Store) ChainHeads() (map[string]string, error) {
 	heads := map[string]string{}
-	for _, node := range s.nodes() {
+	nodes, err := s.nodes()
+	if err != nil {
+		return nil, err
+	}
+	for _, node := range nodes {
 		ms, err := manifests(filepath.Join(s.root, node))
 		if err != nil {
 			return nil, err

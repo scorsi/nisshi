@@ -29,7 +29,11 @@ func Read(root string, q Query, w io.Writer) error {
 	}
 	type rec struct{ ts, line string }
 	var recs []rec
-	for _, f := range s.dataFiles() {
+	files, err := s.dataFiles()
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
 		if f.node != q.Node {
 			continue
 		}

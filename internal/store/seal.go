@@ -78,17 +78,27 @@ func manifests(dir string) ([]Manifest, error) {
 
 // SealPast seals every open day file of a past UTC day (ADR 0006), oldest first so the chain
 // links in order. It returns the days sealed and the errors met; a file whose seal fails
-// stays as it is.
+// stays as it is, and so do the later days of its node: sealing them would link past it.
 func (s *Store) SealPast() (sealed []string, errs []error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	today := s.now().UTC().Format("2006-01-02")
-	for _, f := range s.dataFiles() {
+	files, err := s.dataFiles()
+	if err != nil {
+		return nil, []error{err}
+	}
+	failed := map[string]bool{}
+	for _, f := range files {
 		if f.sealed || f.day >= today {
+			continue
+		}
+		if failed[f.node] {
+			errs = append(errs, fmt.Errorf("%s/%s: deferred, an earlier day of the node failed", f.node, f.day))
 			continue
 		}
 		if err := s.seal(f); err != nil {
 			errs = append(errs, fmt.Errorf("%s/%s: %w", f.node, f.day, err))
+			failed[f.node] = true
 			continue
 		}
 		sealed = append(sealed, f.node+"/"+f.day)
@@ -99,7 +109,9 @@ func (s *Store) SealPast() (sealed []string, errs []error) {
 func (s *Store) seal(f dataFile) error {
 	key := f.node + "/" + f.day
 	if n, ok := s.st.Days[key]; ok {
-		os.Truncate(f.path, n) // never seal an uncommitted tail
+		if err := os.Truncate(f.path, n); err != nil { // never seal an uncommitted tail
+			return err
+		}
 	}
 	m := Manifest{V: 1, Node: f.node, Day: f.day, Services: map[string]int{}}
 	ranges := map[string]*StreamRange{}
@@ -184,13 +196,19 @@ func (s *Store) seal(f dataFile) error {
 	if err != nil {
 		return err
 	}
+	// The manifest first: content_sha256 is of the decompressed bytes, so the original file
+	// matches it as well as the recompressed one, and a crash at any step below leaves a sealed
+	// day whose file matches its manifest. Recovery never applies a committed length to it.
+	if err := writeAtomic(s.manifestPath(f.node, f.day), mb, s.crash); err != nil {
+		return err
+	}
 	if err := os.Rename(tmp, f.path); err != nil {
 		return err
 	}
-	if err := syncDir(filepath.Dir(f.path)); err != nil {
-		return err
+	if s.crash != nil && s.crash("seal-rename") {
+		return errors.New("crash after rename")
 	}
-	if err := writeAtomic(s.manifestPath(f.node, f.day), mb, nil); err != nil {
+	if err := syncDir(filepath.Dir(f.path)); err != nil {
 		return err
 	}
 	delete(s.st.Days, key)
@@ -207,7 +225,11 @@ func (s *Store) Retain(days int) ([]string, error) {
 	defer s.mu.Unlock()
 	cutoff := s.now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
 	var deleted []string
-	for _, f := range s.dataFiles() {
+	files, err := s.dataFiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
 		if !f.sealed || f.day >= cutoff {
 			continue
 		}
@@ -230,7 +252,11 @@ func Verify(root string, w io.Writer) error {
 		bad("%s: FORMAT missing or unknown", root)
 	}
 	seqs := map[string][]uint64{}
-	for _, f := range s.dataFiles() {
+	files, err := s.dataFiles()
+	if err != nil {
+		bad("%v", err)
+	}
+	for _, f := range files {
 		_, _, err := readLines(f.path, func(line []byte) error {
 			var e envelope
 			if err := json.Unmarshal(line, &e); err != nil {
@@ -255,7 +281,11 @@ func Verify(root string, w io.Writer) error {
 			}
 		}
 	}
-	for _, node := range s.nodes() {
+	nodes, err := s.nodes()
+	if err != nil {
+		bad("%v", err)
+	}
+	for _, node := range nodes {
 		ms, err := manifests(filepath.Join(root, node))
 		if err != nil {
 			bad("%v", err)
