@@ -30,3 +30,21 @@ unverifiable.
 - The open day is not covered until sealed: at most 24 hours of unchained data.
 - Someone with write access to the store's host can rebuild a consistent chain; only heads
   recorded elsewhere detect it. Anchoring is an open question.
+
+## Amendment — 2026-10-22 (accepted, owner decision: notes, no design change)
+
+What a passing `nisshi verify` proves, and what it does not (nisshi review §3.1):
+
+- It proves that the files present agree with the manifests present: each sealed day's
+  decompressed content matches its manifest (hash, count, read strictly), each manifest links
+  to the previous one present, and no `(stream, seq)` appears twice in the data present.
+- It does not prove completeness: removing the newest sealed days of a node (data and
+  manifests), or a whole node, leaves a consistent chain. Only chain heads recorded outside the
+  host detect it, and only for the prefix they saw; anchoring stays open.
+- It does not prove origin or truth: a stolen node token pushes valid records that are sealed
+  like the others.
+- A manifest without its data file is accepted as retention, whatever removed the data
+  (ADR 0006 amendment); the open day is not covered (no manifest, `state.json` not compared).
+- The unchained window is the open day plus any day whose seal failed or was deferred, and
+  the time nisshi was down: watch `nisshi_seals_total{result="error"}` and the age of the
+  newest manifest, not only the existence of a head.

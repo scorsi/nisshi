@@ -66,3 +66,14 @@ Harmonisation across services:
 - nisshi rejects batches that violate the envelope (0003); service fields are not checked
   centrally.
 - A service repository takes nisshi as an input for tests only: no runtime dependency.
+
+## Amendment — 2026-10-22 (accepted, owner decision: notes, no design change)
+
+What the fixtures do not fix yet (nisshi review §3.4): Go's `encoding/json` (nisshi) and
+`serde_json` (hikyaku) differ outside the current fixtures, on JSON nesting depth (10 000
+against about 128), on numbers out of `f64` range in service fields (`1e10000`: Go accepts
+the syntax, Rust refuses), and on lone UTF-16 surrogates (`\ud800`). A line in one of these
+corners can pass `nisshi validate --logs` and still be wrapped as `unparsed` by hikyaku: the
+bytes travel, their interpretation changes. Free service fields named like envelope members
+in another case (`TS`, `SEQ`) are accepted and never read as the envelope (storage-format).
+Deciding these limits means fixtures first, in both implementations.

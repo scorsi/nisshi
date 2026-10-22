@@ -49,3 +49,7 @@ Review findings on the seal path (nisshi review §2.1, §2.13):
   agent keeps its spool and retries with back-off; pushes succeed again once the clock is right.
   Old event timestamps are not affected: a late batch is stored in the current receive day as
   before.
+- **Retention and loss look alike** (nisshi review §3.2): a manifest without its data file is
+  read as retention whatever removed the file, so `verify` cannot tell yesterday's accidental
+  deletion from a deletion after 400 days. Proving availability before expiry would need an
+  explicit rule (a new storage-format version); not decided.
