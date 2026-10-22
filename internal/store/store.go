@@ -304,28 +304,37 @@ func (s *Store) Push(b Batch) (Result, error) {
 	}
 	var r Result
 	r.Acked = st.Hwm
-	var lines bytes.Buffer
-	now := s.now().UTC()
-	ts := now.Format(TsLayout)
-	recv := []byte(`,"recv_ts":"` + ts + `"}` + "\n")
-	for i, rec := range b.Records {
-		if b.FirstSeq+uint64(i) <= st.Hwm {
-			r.Duplicates++
-			continue
-		}
-		lines.Write(rec[:len(rec)-1])
-		lines.Write(recv)
-		r.Stored++
+	// seqs are consecutive: the duplicates are a prefix of the batch.
+	if st.Hwm >= b.FirstSeq {
+		r.Duplicates = int(min(st.Hwm-b.FirstSeq+1, uint64(len(b.Records))))
 	}
+	r.Stored = len(b.Records) - r.Duplicates
 	if r.Stored == 0 {
 		return r, nil
 	}
+	now := s.now().UTC()
+	ts := now.Format(TsLayout)
+	recv := []byte(`,"recv_ts":"` + ts + `"}` + "\n")
 	ownSeq := s.st.OwnSeq
+	var gap string
 	if b.FirstSeq > st.Hwm+1 {
 		r.Gap = true
 		ownSeq++
-		fmt.Fprintf(&lines, `{"v":1,"ts":%q,"level":"warn","event":"seq-gap","node":%q,"service":"nisshi","stream":%q,"seq":%d,"gap_stream":%q,"from_seq":%d,"to_seq":%d%s`,
+		gap = fmt.Sprintf(`{"v":1,"ts":%q,"level":"warn","event":"seq-gap","node":%q,"service":"nisshi","stream":%q,"seq":%d,"gap_stream":%q,"from_seq":%d,"to_seq":%d%s`,
 			ts, b.Node, GapStream, ownSeq, b.Stream, st.Hwm+1, b.FirstSeq-1, recv)
+	}
+	// Streamed into the frame, never into one buffer: a batch may be 64 MiB (ADR 0003).
+	write := func(w io.Writer) error {
+		for _, rec := range b.Records[r.Duplicates:] {
+			if _, err := w.Write(rec[:len(rec)-1]); err != nil {
+				return err
+			}
+			if _, err := w.Write(recv); err != nil {
+				return err
+			}
+		}
+		_, err := io.WriteString(w, gap)
+		return err
 	}
 	day := now.Format("2006-01-02")
 	key := b.Node + "/" + day
@@ -346,7 +355,7 @@ func (s *Store) Push(b Batch) (Result, error) {
 	if free < s.reserve {
 		return r, fmt.Errorf("%w: %d bytes free, reserve %d", ErrDisk, free, s.reserve)
 	}
-	frameLen, err := s.appendFrame(b.Node, day, committed, lines.Bytes())
+	frameLen, err := s.appendFrame(b.Node, day, committed, write)
 	if err != nil {
 		return r, s.rollback(s.dataPath(b.Node, day), committed, err)
 	}
@@ -433,9 +442,9 @@ func (s *Store) rollback(path string, committed int64, cause error) error {
 	return fmt.Errorf("%w: %v", ErrDisk, cause)
 }
 
-// appendFrame writes one zstd frame at the committed length of the day file, fsyncs it and
-// returns the frame's length.
-func (s *Store) appendFrame(node, day string, committed int64, lines []byte) (int64, error) {
+// appendFrame writes one zstd frame of what write writes at the committed length of the day
+// file, fsyncs it and returns the frame's length.
+func (s *Store) appendFrame(node, day string, committed int64, write func(io.Writer) error) (int64, error) {
 	dir := filepath.Join(s.root, node)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return 0, err
@@ -445,8 +454,12 @@ func (s *Store) appendFrame(node, day string, committed int64, lines []byte) (in
 		return 0, err
 	}
 	defer f.Close()
-	frame := s.enc.EncodeAll(lines, nil)
-	if _, err := f.WriteAt(frame, committed); err != nil {
+	w := &countWriter{w: io.NewOffsetWriter(f, committed)}
+	s.enc.Reset(w)
+	if err := write(s.enc); err != nil {
+		return 0, err
+	}
+	if err := s.enc.Close(); err != nil {
 		return 0, err
 	}
 	if err := f.Sync(); err != nil {
@@ -460,7 +473,18 @@ func (s *Store) appendFrame(node, day string, committed int64, lines []byte) (in
 			return 0, err
 		}
 	}
-	return int64(len(frame)), nil
+	return w.n, nil
+}
+
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // writeState commits state.json: tmp, fsync, rename, fsync dir.

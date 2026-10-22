@@ -26,3 +26,19 @@ Plus the open day (≈ 8 MB), manifests (negligible), and the free-space reserve
 
 `nisshi serve` ≤ 64 MiB RSS (`GOMEMLIMIT=64MiB`, `MemoryMax=128M`). CPU idle except the
 nightly seal (seconds).
+
+`GOMEMLIMIT` is a GC target, not a ceiling: a push needs its decompressed body in memory. One
+push at a time is processed from body read to commit (others wait, unread, in their
+connection); records alias the decompressed body and are streamed into the frame, so the
+worst case is about one decompressed body plus the encoder. Max RSS of `nisshi serve` with
+`GOMEMLIMIT=64MiB`, one push, measured on macOS arm64 on 2026-10-22 (before → after the review
+fixes):
+
+| Push | Before | After |
+|---|---|---|
+| 15 records of 4 MiB (59 MiB decompressed) | 264 MiB | 97 MiB |
+| 400 000 small records (63 MiB decompressed) | 356 MiB | 117 MiB |
+| 8 Mi empty records (16 MiB decompressed, invalid) | 744 MiB | 77 MiB |
+
+The 64 MiB batch fits `MemoryMax=128M` with about 10 % margin; hikyaku's batches (4 MiB) are
+far below. A measurement under systemd on the deployed node is still due (M1).

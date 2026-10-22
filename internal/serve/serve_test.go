@@ -332,3 +332,97 @@ func TestSealedDay503(t *testing.T) {
 		t.Errorf("no error event: %s", logs)
 	}
 }
+
+// decodePush answers as proto.Unmarshal does, records aside: it keeps maxRecords+1 of them.
+func TestDecodePush(t *testing.T) {
+	good, _ := proto.Marshal(&nisshiv1.PushRequest{Node: "node-a", StreamId: []byte{1, 2}, FirstSeq: 7, Records: [][]byte{[]byte("a"), {}}, Status: &nisshiv1.AgentStatus{Version: "v", Paused: true}})
+	for name, b := range map[string][]byte{
+		"good":            good,
+		"unknown field":   append(bytes.Clone(good), 0x30, 0x01),
+		"wrong wire type": append(bytes.Clone(good), 0x18|5, 1, 2, 3, 4),
+		"status twice":    append(bytes.Clone(good), 0x2a, 2, 0x20, 0x00),
+		"bad utf8 node":   {0x0a, 1, 0xff},
+		"truncated":       good[:len(good)-1],
+		"field number 0":  {0x00, 0x01},
+		"bad status":      {0x2a, 2, 0x0a, 5},
+		"empty":           {},
+	} {
+		var want nisshiv1.PushRequest
+		werr := proto.Unmarshal(b, &want)
+		want.ProtoReflect().SetUnknown(nil) // dropped: nothing reads them
+		got, err := decodePush(b)
+		if (err != nil) != (werr != nil) || err == nil && !proto.Equal(got, &want) {
+			t.Errorf("%s: got %v %v, want %v %v", name, got, err, &want, werr)
+		}
+	}
+	// An absurd count of empty records: a bounded slice, and the indexed 400 of the first one.
+	head, _ := proto.Marshal(&nisshiv1.PushRequest{Node: "node-a", StreamId: bytes.Repeat([]byte{7}, 16), FirstSeq: 1})
+	raw := append(head, bytes.Repeat([]byte{0x22, 0}, 1<<20)...)
+	if req, _ := decodePush(raw); len(req.Records) != maxRecords+1 {
+		t.Errorf("%d records kept", len(req.Records))
+	}
+	_, ts, _ := newTestServer(t, 0)
+	if code, _, rj := push(t, ts.URL, pushOpts{raw: raw}); code != 400 || rj.Reason != "framing" || rj.RecordIndex == nil || *rj.RecordIndex != 0 {
+		t.Errorf("%d %v", code, rj)
+	}
+	// The smallest valid record is longer than the bound assumes.
+	if r := `{"v":1,"ts":"2026-10-19T08:00:00.000000000Z","level":"info","event":"a","node":"a","service":"a","stream":"` + strings.Repeat("0", 32) + `","seq":1}`; logschema.Record([]byte(r)) != "" || len(r)+2 < minRecordWire {
+		t.Error("minRecordWire")
+	}
+}
+
+// Pushes queue on one admission slot; an agent's status is kept bounded.
+func TestPushAdmissionAndStatus(t *testing.T) {
+	s, ts, _ := newTestServer(t, 0)
+	done := make(chan int, 3)
+	for i := 0; i < 3; i++ {
+		sid := bytes.Repeat([]byte{byte(i + 1)}, 16)
+		recs := [][]byte{bytes.ReplaceAll(record("node-a", 1, ""), []byte(streamHex), []byte(hex.EncodeToString(sid)))}
+		go func() { code, _, _ := push(t, ts.URL, pushOpts{streamID: sid, first: 1, records: recs}); done <- code }()
+	}
+	for i := 0; i < 3; i++ {
+		if code := <-done; code != 200 {
+			t.Errorf("concurrent push: %d", code)
+		}
+	}
+	body, _ := proto.Marshal(&nisshiv1.PushRequest{Node: "node-a", StreamId: bytes.Repeat([]byte{1}, 16), FirstSeq: 1, Status: &nisshiv1.AgentStatus{Version: strings.Repeat("v", 10000)}})
+	body = append(body, 0x2a, 2, 0x78, 0x01) // status with an unknown field 15
+	if code, _, _ := push(t, ts.URL, pushOpts{raw: body}); code != 200 {
+		t.Fatalf("code %d", code)
+	}
+	st := s.agents["node-a"]
+	if len(st.Version) != maxVersion || len(st.ProtoReflect().GetUnknown()) != 0 {
+		t.Errorf("status kept: %d bytes of version, unknown %v", len(st.Version), st.ProtoReflect().GetUnknown())
+	}
+}
+
+// Deadlines reclaim a connection whose body never comes, with or without a token, and an idle
+// keep-alive connection.
+func TestDeadlines(t *testing.T) {
+	defer func(r, w, i time.Duration) { readTimeout, writeTimeout, idleTimeout = r, w, i }(readTimeout, writeTimeout, idleTimeout)
+	readTimeout, writeTimeout, idleTimeout = 300*time.Millisecond, time.Second, 300*time.Millisecond
+	s, _, _ := newTestServer(t, 0)
+	ts := httptest.NewUnstartedServer(nil)
+	ts.Config = httpServer(s.handler(), s.log)
+	ts.Start()
+	defer ts.Close()
+	for name, req := range map[string]string{
+		"body never sent, token":    "POST /v1/push HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer tok-a\r\nContent-Encoding: zstd\r\nContent-Length: 100\r\n\r\n",
+		"body never sent, no token": "POST /v1/push HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\n",
+		"chunked, stalled":          "POST /v1/push HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer tok-a\r\nContent-Encoding: zstd\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab",
+		"idle keep-alive":           "GET /v1/status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer tok-r\r\n\r\n",
+	} {
+		c, err := net.Dial("tcp", ts.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write([]byte(req))
+		start := time.Now()
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		io.Copy(io.Discard, c) // until the server closes
+		if d := time.Since(start); d > 3*time.Second {
+			t.Errorf("%s: open for %v", name, d)
+		}
+		c.Close()
+	}
+}

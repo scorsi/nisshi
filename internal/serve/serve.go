@@ -20,9 +20,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	nisshiv1 "nisshi/gen/nisshi/v1"
@@ -36,7 +38,25 @@ var Version = "dev"
 const (
 	maxCompressed   = 8 << 20
 	maxDecompressed = 64 << 20
+	// minRecordWire is below the wire size of the smallest valid record (149 bytes of JSON plus
+	// its 2-byte field header), so a body of maxDecompressed bytes holds at most maxRecords
+	// valid records: with more, one of the first maxRecords+1 is invalid.
+	minRecordWire = 128
+	maxRecords    = maxDecompressed / minRecordWire
+	maxVersion    = 256 // AgentStatus.version kept for /v1/status
 )
+
+// HTTP deadlines, calibrated on hikyaku's 30 s request timeout: a client has given up long
+// before them, they only reclaim connections a client left hanging. Variables for the tests.
+var (
+	readTimeout  = 60 * time.Second  // headers and body
+	writeTimeout = 120 * time.Second // from the end of the headers: queue, commit, a seal holding the store
+	idleTimeout  = 120 * time.Second
+)
+
+func httpServer(h http.Handler, log *slog.Logger) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleTimeout: idleTimeout, MaxHeaderBytes: 64 << 10, ErrorLog: errorLog(log)}
+}
 
 // Server serves one store.
 type Server struct {
@@ -46,6 +66,9 @@ type Server struct {
 	now     func() time.Time
 	dec     *zstd.Decoder
 	metrics metrics
+	// pushing admits one push at a time from body read to commit: the memory of a 64 MiB batch is
+	// budgeted once (MemoryMax=128M); the others wait, unread, in their connection.
+	pushing chan struct{}
 	mu      sync.Mutex
 	agents  map[string]*nisshiv1.AgentStatus
 }
@@ -114,7 +137,8 @@ func Run(cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: s.handler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog(log)}
+	srv := httpServer(s.handler(), log)
+	srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	var servers []*http.Server
 	var listeners []net.Listener
 	for _, addr := range cfg.Listen {
@@ -131,7 +155,7 @@ func Run(cfg Config, log *slog.Logger) error {
 		}
 		mm := http.NewServeMux()
 		mm.HandleFunc("GET /metrics", s.serveMetrics)
-		msrv := &http.Server{Handler: mm, ReadHeaderTimeout: 10 * time.Second, ErrorLog: errorLog(log)}
+		msrv := httpServer(mm, log)
 		servers = append(servers, msrv)
 		go msrv.Serve(ln)
 	}
@@ -176,7 +200,7 @@ func newServer(cfg Config, log *slog.Logger, now func() time.Time) (*Server, err
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, st: st, log: log, now: now, dec: dec, agents: map[string]*nisshiv1.AgentStatus{}}
+	s := &Server{cfg: cfg, st: st, log: log, now: now, dec: dec, pushing: make(chan struct{}, 1), agents: map[string]*nisshiv1.AgentStatus{}}
 	s.metrics.init()
 	return s, nil
 }
@@ -290,6 +314,15 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 	if !strings.EqualFold(r.Header.Get("Content-Encoding"), "zstd") {
 		return reject(w, nil, "content-encoding")
 	}
+	select {
+	case s.pushing <- struct{}{}:
+		defer func() { <-s.pushing }()
+	case <-r.Context().Done():
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return http.StatusServiceUnavailable
+	}
+	// Any read error is 413, a deadline too: the agent splits the batch, which also gets a
+	// slow link through.
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCompressed))
 	if err != nil {
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
@@ -302,8 +335,8 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 		}
 		return reject(w, nil, "body-zstd")
 	}
-	var req nisshiv1.PushRequest
-	if err := proto.Unmarshal(body, &req); err != nil {
+	req, err := decodePush(body)
+	if err != nil {
 		return reject(w, nil, "body-protobuf")
 	}
 	switch {
@@ -360,15 +393,68 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 	if res.Gap {
 		s.metrics.add("gaps", "", 1)
 	}
-	if req.Status != nil {
+	if st := req.Status; st != nil {
+		st.ProtoReflect().SetUnknown(nil)
+		if len(st.Version) > maxVersion {
+			st.Version = strings.Clone(st.Version[:maxVersion])
+		}
 		s.mu.Lock()
-		s.agents[node] = req.Status
+		s.agents[node] = st
 		s.mu.Unlock()
 	}
 	out, _ := proto.Marshal(&nisshiv1.PushResponse{AckedSeq: res.Acked})
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	w.Write(out)
 	return http.StatusOK
+}
+
+// decodePush is proto.Unmarshal of a PushRequest whose records alias body instead of copying it,
+// and which keeps at most maxRecords+1 of them: an absurd count of tiny records cannot allocate
+// past the memory budget, and the first invalid record is among those kept.
+func decodePush(b []byte) (*nisshiv1.PushRequest, error) {
+	req := &nisshiv1.PushRequest{}
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		b = b[n:]
+		var v []byte
+		if typ == protowire.BytesType {
+			if v, n = protowire.ConsumeBytes(b); n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+		}
+		switch {
+		case num == 1 && typ == protowire.BytesType:
+			if !utf8.Valid(v) {
+				return nil, errors.New("node: invalid UTF-8")
+			}
+			req.Node = string(v)
+		case num == 2 && typ == protowire.BytesType:
+			req.StreamId = v
+		case num == 3 && typ == protowire.VarintType:
+			req.FirstSeq, n = protowire.ConsumeVarint(b)
+		case num == 4 && typ == protowire.BytesType:
+			if len(req.Records) <= maxRecords {
+				req.Records = append(req.Records, v[:len(v):len(v)])
+			}
+		case num == 5 && typ == protowire.BytesType:
+			if req.Status == nil {
+				req.Status = &nisshiv1.AgentStatus{}
+			}
+			if err := (proto.UnmarshalOptions{Merge: true}).Unmarshal(v, req.Status); err != nil {
+				return nil, err
+			}
+		default: // an unknown field, or a known one with another wire type (as proto.Unmarshal)
+			n = protowire.ConsumeFieldValue(num, typ, b)
+		}
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		b = b[n:]
+	}
+	return req, nil
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {

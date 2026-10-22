@@ -55,3 +55,18 @@ says so loudly.
 - Ordering is guaranteed within a stream only; readers sort by `ts`.
 - A store restored from an older backup sees `first_seq > hwm + 1` and records the gap rather
   than hiding it.
+
+## Amendment — 2026-10-22 (accepted, owner decision)
+
+Review findings: nisshi review §2.8, §2.9, §2.15; challenge §3.3. The limits (8 MiB
+compressed, 64 MiB decompressed) are unchanged.
+
+- **One push at a time** is processed, from reading the body to the commit; later pushes wait
+  in their connection (not refused). Records are not copied out of the decompressed body and
+  are streamed into the frame; a body with more records than valid records could fill
+  (64 MiB / 128 bytes) keeps only the first ones, among which is the first invalid record that
+  the indexed 400 reports. Measurements: [resources](../resources.md).
+- **Deadlines**: 60 s to read a request (headers and body), 120 s to write its response, 120 s
+  for an idle connection, 64 KiB of headers. A body not received in time is answered like a
+  body too large (413): the agent splits the batch, which also gets a slow link through.
+- An agent's `status` is kept with `version` cut to 256 bytes and unknown fields dropped.
