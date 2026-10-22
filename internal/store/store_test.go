@@ -578,6 +578,10 @@ func TestVerifyStrict(t *testing.T) {
 			os.Rename(s.dataPath("node-a", "2026-10-19"), s.dataPath("node-a", "2026-02-30"))
 			os.Remove(p)
 		},
+		"long record": func(s *Store) { // valid JSON, unique seq, over the 4 MiB a stored line may have
+			rec := append(bytes.TrimSuffix(record(99), []byte("}")), `,"pad":"`+strings.Repeat("a", maxLine)+`"}`+"\n"...)
+			os.WriteFile(s.dataPath("node-a", "2026-10-20"), s.enc.EncodeAll(rec, nil), 0o640)
+		},
 		"long line": func(s *Store) {
 			os.WriteFile(s.dataPath("node-a", "2026-10-20"), s.enc.EncodeAll(bytes.Repeat([]byte("a"), maxLine+1), nil), 0o640)
 		},

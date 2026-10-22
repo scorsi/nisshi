@@ -628,6 +628,9 @@ func readFrom(f io.Reader, strict bool, fn func(line []byte) error) (sha string,
 			if i < 0 {
 				break
 			}
+			if i > maxLine {
+				return "", n, fmt.Errorf("line %d: over %d bytes", n+1, maxLine)
+			}
 			if err := fn(rest[:i]); err != nil {
 				return "", n, err
 			}
