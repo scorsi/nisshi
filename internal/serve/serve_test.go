@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	nisshiv1 "nisshi/gen/nisshi/v1"
@@ -103,6 +104,14 @@ func push(t *testing.T, url string, o pushOpts) (int, *nisshiv1.PushResponse, *n
 		return resp.StatusCode, nil, &rj
 	}
 	return resp.StatusCode, nil, nil
+}
+
+func mustMarshal(m proto.Message) []byte {
+	b, err := proto.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 func records(node string, first uint64, n int) [][]byte {
@@ -337,19 +346,28 @@ func TestSealedDay503(t *testing.T) {
 func TestDecodePush(t *testing.T) {
 	good, _ := proto.Marshal(&nisshiv1.PushRequest{Node: "node-a", StreamId: []byte{1, 2}, FirstSeq: 7, Records: [][]byte{[]byte("a"), {}}, Status: &nisshiv1.AgentStatus{Version: "v", Paused: true}})
 	for name, b := range map[string][]byte{
-		"good":            good,
-		"unknown field":   append(bytes.Clone(good), 0x30, 0x01),
-		"wrong wire type": append(bytes.Clone(good), 0x18|5, 1, 2, 3, 4),
-		"status twice":    append(bytes.Clone(good), 0x2a, 2, 0x20, 0x00),
-		"bad utf8 node":   {0x0a, 1, 0xff},
-		"truncated":       good[:len(good)-1],
-		"field number 0":  {0x00, 0x01},
-		"bad status":      {0x2a, 2, 0x0a, 5},
-		"empty":           {},
+		"good":                          good,
+		"unknown field":                 append(bytes.Clone(good), 0x30, 0x01),
+		"wrong wire type":               append(bytes.Clone(good), 0x18|5, 1, 2, 3, 4),
+		"status twice":                  append(bytes.Clone(good), 0x2a, 2, 0x20, 0x00),
+		"bad utf8 node":                 {0x0a, 1, 0xff},
+		"truncated":                     good[:len(good)-1],
+		"field number 0":                {0x00, 0x01},
+		"bad status":                    {0x2a, 2, 0x0a, 5},
+		"empty":                         {},
+		"field number over the maximum": append(protowire.AppendTag(bytes.Clone(good), protowire.MaxValidNumber+1, protowire.VarintType), 1),
+		"status, field number over":     append([]byte{0x2a, 6}, append(protowire.AppendTag(nil, protowire.MaxValidNumber+1, protowire.VarintType), 1)...),
+		"status, every field":           protowire.AppendBytes([]byte{0x2a}, mustMarshal(&nisshiv1.AgentStatus{Version: "é", SpoolBytes: 1, SpoolLimitBytes: 2, Paused: true, OldestUnackedNs: -3})),
+		"status, bad utf8 version":      {0x2a, 3, 0x0a, 1, 0xff},
+		"status, wrong wire types":      {0x2a, 7, 0x0d, 1, 2, 3, 4, 0x20, 0x01},
+		"status, unknown field":         {0x2a, 4, 0x78, 0x01, 0x20, 0x02},
 	} {
 		var want nisshiv1.PushRequest
 		werr := proto.Unmarshal(b, &want)
 		want.ProtoReflect().SetUnknown(nil) // dropped: nothing reads them
+		if want.Status != nil {
+			want.Status.ProtoReflect().SetUnknown(nil)
+		}
 		got, err := decodePush(b)
 		if (err != nil) != (werr != nil) || err == nil && !proto.Equal(got, &want) {
 			t.Errorf("%s: got %v %v, want %v %v", name, got, err, &want, werr)
@@ -393,6 +411,26 @@ func TestPushAdmissionAndStatus(t *testing.T) {
 	st := s.agents["node-a"]
 	if len(st.Version) != maxVersion || len(st.ProtoReflect().GetUnknown()) != 0 {
 		t.Errorf("status kept: %d bytes of version, unknown %v", len(st.Version), st.ProtoReflect().GetUnknown())
+	}
+	// The cut falls inside a two-byte rune: it keeps the rune whole out, and /v1/status still
+	// serialises (validation R3).
+	version := strings.Repeat("v", maxVersion-1) + "é"
+	body, _ = proto.Marshal(&nisshiv1.PushRequest{Node: "node-a", StreamId: bytes.Repeat([]byte{1}, 16), FirstSeq: 1, Status: &nisshiv1.AgentStatus{Version: version}})
+	if code, _, _ := push(t, ts.URL, pushOpts{raw: body}); code != 200 {
+		t.Fatalf("code %d", code)
+	}
+	req, _ := http.NewRequest("GET", ts.URL+"/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer tok-r")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Agents map[string]struct{ Version string }
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); resp.StatusCode != 200 || err != nil || got.Agents["node-a"].Version != version[:maxVersion-1] {
+		t.Errorf("status: %d %v %+v", resp.StatusCode, err, got)
 	}
 }
 

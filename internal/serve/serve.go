@@ -397,10 +397,6 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 		s.metrics.add("gaps", "", 1)
 	}
 	if st := req.Status; st != nil {
-		st.ProtoReflect().SetUnknown(nil)
-		if len(st.Version) > maxVersion {
-			st.Version = strings.Clone(st.Version[:maxVersion])
-		}
 		s.mu.Lock()
 		s.agents[node] = st
 		s.mu.Unlock()
@@ -420,6 +416,9 @@ func decodePush(b []byte) (*nisshiv1.PushRequest, error) {
 		num, typ, n := protowire.ConsumeTag(b)
 		if n < 0 {
 			return nil, protowire.ParseError(n)
+		}
+		if !num.IsValid() { // ConsumeTag checks only the lower bound
+			return nil, fmt.Errorf("field number %d out of range", num)
 		}
 		b = b[n:]
 		var v []byte
@@ -446,7 +445,7 @@ func decodePush(b []byte) (*nisshiv1.PushRequest, error) {
 			if req.Status == nil {
 				req.Status = &nisshiv1.AgentStatus{}
 			}
-			if err := (proto.UnmarshalOptions{Merge: true}).Unmarshal(v, req.Status); err != nil {
+			if err := decodeStatus(v, req.Status); err != nil {
 				return nil, err
 			}
 		default: // an unknown field, or a known one with another wire type (as proto.Unmarshal)
@@ -458,6 +457,57 @@ func decodePush(b []byte) (*nisshiv1.PushRequest, error) {
 		b = b[n:]
 	}
 	return req, nil
+}
+
+// decodeStatus merges an AgentStatus into st as proto.Unmarshal does, unknown fields dropped
+// (nothing reads them). Only the first maxVersion bytes of version are copied out of the body,
+// cut on a rune boundary: a version filling the body costs no second copy, and the kept status
+// stays valid UTF-8 for protojson.
+func decodeStatus(b []byte, st *nisshiv1.AgentStatus) error {
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		if !num.IsValid() {
+			return fmt.Errorf("status: field number %d out of range", num)
+		}
+		b = b[n:]
+		switch {
+		case num == 1 && typ == protowire.BytesType:
+			var v []byte
+			if v, n = protowire.ConsumeBytes(b); n >= 0 {
+				if !utf8.Valid(v) {
+					return errors.New("status version: invalid UTF-8")
+				}
+				k := min(len(v), maxVersion)
+				for k < len(v) && !utf8.RuneStart(v[k]) {
+					k--
+				}
+				st.Version = string(v[:k])
+			}
+		case num >= 2 && num <= 5 && typ == protowire.VarintType:
+			var x uint64
+			x, n = protowire.ConsumeVarint(b)
+			switch num {
+			case 2:
+				st.SpoolBytes = x
+			case 3:
+				st.SpoolLimitBytes = x
+			case 4:
+				st.Paused = x != 0
+			case 5:
+				st.OldestUnackedNs = int64(x)
+			}
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, b)
+		}
+		if n < 0 {
+			return protowire.ParseError(n)
+		}
+		b = b[n:]
+	}
+	return nil
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
@@ -488,7 +538,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.ChainHeads = heads
-	b, _ := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(resp)
+	b, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(resp)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(append(b, '\n'))
 }
