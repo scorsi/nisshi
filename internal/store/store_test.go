@@ -686,7 +686,19 @@ func TestRestore(t *testing.T) {
 	}
 	for name, tail := range map[string][]byte{"exact": nil, "truncated tail": s.enc.EncodeAll(record(31), nil)[:20]} {
 		root := backup(tail)
+		// Backup artefacts copied by mistake are not store files: the deployment's LAST_RUN marker,
+		// stray *.tmp files, and a directory that is no node (ext4's lost+found).
+		os.WriteFile(filepath.Join(root, "LAST_RUN"), []byte("2026-10-20T12:00:00Z\n"), 0o640)
+		os.WriteFile(filepath.Join(root, "state.json.tmp"), []byte("{"), 0o640)
+		os.WriteFile(filepath.Join(root, "node-a.ndjson.zst.tmp"), []byte("x"), 0o640)
+		os.WriteFile(filepath.Join(root, "node-a", "2026-10-19.manifest.json.tmp"), []byte("{"), 0o640)
+		os.Mkdir(filepath.Join(root, "lost+found"), 0o700)
+		junk := filepath.Join(root, "lost+found", "2026-10-19.ndjson.zst")
+		os.WriteFile(junk, []byte("not a store file"), 0o640)
 		r := open(t, root, c)
+		if b, _ := os.ReadFile(junk); string(b) != "not a store file" {
+			t.Errorf("%s: a file outside the node directories was changed: %q", name, b)
+		}
 		if n, ok := r.Rebuilt(); !ok || n != 2 {
 			t.Errorf("%s: rebuilt %d %v", name, n, ok)
 		}
@@ -716,8 +728,20 @@ func TestRestore(t *testing.T) {
 		}
 		c.t = day0.AddDate(0, 0, 1)
 	}
-	// A manifest whose stream ranges do not match its data stops the start.
+	// A .partial left unrenamed is an incomplete restore: it stops the start instead of being
+	// skipped (its records would be missing from the rebuilt hwm).
 	root := backup(nil)
+	if err := os.Rename(filepath.Join(root, "node-a", "2026-10-20.ndjson.zst"), filepath.Join(root, "node-a", "2026-10-20.ndjson.zst.partial")); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := Open(root, 0, c.now); err == nil || !strings.Contains(err.Error(), ".partial") {
+		if err == nil {
+			r.Close()
+		}
+		t.Errorf("opened with a .partial left: %v", err)
+	}
+	// A manifest whose stream ranges do not match its data stops the start.
+	root = backup(nil)
 	p := filepath.Join(root, "node-a", "2026-10-19.manifest.json")
 	m, _ := os.ReadFile(p)
 	os.WriteFile(p, bytes.Replace(m, []byte(`"last_seq":25`), []byte(`"last_seq":24`), 1), 0o640)

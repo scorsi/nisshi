@@ -79,9 +79,16 @@ data the backup does not hold.
 
 1. Stop nisshi; start from an **empty** data directory.
 2. Copy `FORMAT`, every `<node>/<day>.ndjson.zst` and `<node>/<day>.manifest.json`, and every
-   `.partial` file of the backup into it.
+   `.partial` file of the backup into it. Leave out everything else the backup tree holds: the
+   deployment's `LAST_RUN` marker at its root and any `*.tmp` file (a copy the backup did not
+   finish).
 3. Rename each `<day>.ndjson.zst.partial` to `<day>.ndjson.zst`.
 4. Start nisshi.
+
+The writer reads only `FORMAT`, `state.json` and the node directories (names matching
+`<node>`): another file or directory at the root (`LAST_RUN`, `*.tmp`, `lost+found`) is ignored,
+never read as node data. A `.partial` file still in a node directory stops the start: step 3
+was skipped.
 
 At start without `state.json`, the writer rebuilds its state from the files before accepting
 pushes, and logs one `restore` event:

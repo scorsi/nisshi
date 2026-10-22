@@ -83,6 +83,9 @@ func (s *Store) rebuild() error {
 			return err
 		}
 		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".ndjson.zst.partial") {
+				return fmt.Errorf("%s: rename each .partial to .ndjson.zst before starting (storage-format, \"Restore\")", filepath.Join(dir, e.Name()))
+			}
 			day, ok := strings.CutSuffix(e.Name(), ".ndjson.zst")
 			if !ok {
 				continue

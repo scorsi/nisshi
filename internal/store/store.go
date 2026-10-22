@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -260,11 +261,15 @@ func (s *Store) dataFiles() ([]dataFile, error) {
 	return out, nil
 }
 
+// nodeDir is a node directory's name (storage-format, "Layout"). Anything else at the root
+// (FORMAT, state.json, a backup's LAST_RUN or *.tmp, lost+found) is not node data.
+var nodeDir = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
 func (s *Store) nodes() ([]string, error) {
 	entries, err := os.ReadDir(s.root)
 	var nodes []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && nodeDir.MatchString(e.Name()) {
 			nodes = append(nodes, e.Name())
 		}
 	}
