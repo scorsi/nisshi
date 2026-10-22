@@ -469,6 +469,14 @@ func TestParseTime(t *testing.T) {
 	if _, err := ParseTime("yesterday", now); err == nil {
 		t.Error("accepted garbage")
 	}
+	for _, s := range []string{"1677-09-21T00:12:43.145224191Z", "2262-04-11T23:47:16.854775808Z", "+2562047h"} {
+		if _, err := ParseTime(s, now); err == nil {
+			t.Errorf("%s: accepted outside the ts range", s)
+		}
+	}
+	if _, err := ParseTime("2262-04-11T23:47:16.854775807Z", now); err != nil {
+		t.Error(err)
+	}
 }
 
 // Free service fields named like envelope members (`TS`, `SEQ`, …) never change the envelope a

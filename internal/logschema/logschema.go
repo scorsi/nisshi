@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -47,6 +48,13 @@ func RecordFields(b []byte) (Fields, string) {
 	return f, ""
 }
 
+// MinTs and MaxTs bound ts: the instants a signed 64-bit count of nanoseconds since the Unix
+// epoch can hold, masu's range (log-schema.md, "Field formats").
+var MinTs, MaxTs = time.Unix(0, math.MinInt64).UTC(), time.Unix(0, math.MaxInt64).UTC()
+
+// TsInRange reports whether t is between MinTs and MaxTs.
+func TsInRange(t time.Time) bool { return !t.Before(MinTs) && !t.After(MaxTs) }
+
 var (
 	tsRe     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z$`)
 	eventRe  = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
@@ -69,8 +77,8 @@ var serviceFields = []field{
 		if !ok || !tsRe.MatchString(s) {
 			return false
 		}
-		_, err := time.Parse("2006-01-02T15:04:05.000000000Z", s)
-		return err == nil
+		t, err := time.Parse("2006-01-02T15:04:05.000000000Z", s)
+		return err == nil && TsInRange(t)
 	}},
 	{"level", true, oneOf("debug", "info", "warn", "error")},
 	{"event", true, matches(eventRe)},

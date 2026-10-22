@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+
+	"nisshi/internal/logschema"
 )
 
 const (
@@ -653,16 +655,19 @@ func parseEnvelope(line []byte) (e envelope, err error) {
 	return e, nil
 }
 
-// ParseTime accepts the schema's ts format, RFC 3339, or an offset such as -1h from now.
+// ParseTime accepts the schema's ts format, RFC 3339, or an offset such as -1h from now, within
+// the schema's ts range.
 func ParseTime(s string, now time.Time) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339Nano, s)
 	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "+") {
-		d, err := time.ParseDuration(s)
-		if err != nil {
-			return time.Time{}, err
-		}
-		return now.Add(d), nil
+		var d time.Duration
+		d, err = time.ParseDuration(s)
+		t = now.Add(d)
 	}
-	return time.Parse(time.RFC3339Nano, s)
+	if err == nil && !logschema.TsInRange(t) {
+		err = fmt.Errorf("%s: outside the ts range %s to %s", s, logschema.MinTs.Format(TsLayout), logschema.MaxTs.Format(TsLayout))
+	}
+	return t, err
 }
 
 func sortedKeys[V any](m map[string]V) []string {

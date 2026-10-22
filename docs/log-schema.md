@@ -60,8 +60,10 @@ string of `PushRejected.reason` and of an `unparsed` record's `reason`:
 | 7 | no reserved name, first one in document order: in a service line the agent's and the store's fields and `_*`; in a record `recv_ts` and `_*` | `reserved-field:<name>` |
 | 8 | fields in this order: `v`, `ts`, `level`, `event`, `msg`, `err`, then for records `node`, `service`, `stream`, `seq`, `source` | `missing-field:<name>` when required and absent, `<name>-format` when present and wrong |
 
-Field formats: `v` is the literal `1` (not `1.0`, not `"1"`); `ts` as above and a real UTC date
-and time; `level` one of the four strings; `event` matches `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`;
+Field formats: `v` is the literal `1` (not `1.0`, not `"1"`); `ts` as above, a real UTC date
+and time, from `1677-09-21T00:12:43.145224192Z` to `2262-04-11T23:47:16.854775807Z` inclusive
+(the range of a signed 64-bit count of nanoseconds since the Unix epoch, as in masu; outside it
+is `ts-format`); `level` one of the four strings; `event` matches `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`;
 `msg` a string; `err` a string, and only when `level` is `warn` or `error` (else `err-format`);
 `node` as above; `service` a non-empty string; `stream` 32 lowercase hex chars; `seq` an
 integer from 1 to 2^64-1 written in plain digits; `source` `journald` or `file`. Nested objects

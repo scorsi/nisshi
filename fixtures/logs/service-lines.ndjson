@@ -23,6 +23,10 @@
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
 {"input":"{\"v\":1,\"ts\":\"2026-13-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
 {"input":"{\"v\":1,\"ts\":1792397643512004117,\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":\"1677-09-21T00:12:43.145224192Z\",\"level\":\"info\",\"event\":\"query\"}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"1677-09-21T00:12:43.145224191Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
+{"input":"{\"v\":1,\"ts\":\"2262-04-11T23:47:16.854775807Z\",\"level\":\"info\",\"event\":\"query\"}","valid":true,"reason":""}
+{"input":"{\"v\":1,\"ts\":\"2262-04-11T23:47:16.854775808Z\",\"level\":\"info\",\"event\":\"query\"}","valid":false,"reason":"ts-format"}
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"warning\",\"event\":\"query\"}","valid":false,"reason":"level-format"}
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"INFO\",\"event\":\"query\"}","valid":false,"reason":"level-format"}
 {"input":"{\"v\":1,\"ts\":\"2026-10-19T08:14:03.512004117Z\",\"level\":\"info\",\"event\":\"Upstream_Timeout\"}","valid":false,"reason":"event-format"}

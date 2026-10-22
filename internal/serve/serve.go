@@ -77,6 +77,9 @@ type Server struct {
 func Clock() (func() time.Time, error) {
 	if v := os.Getenv("NISSHI_FAKE_NOW"); v != "" {
 		t, err := time.Parse(time.RFC3339Nano, v)
+		if err == nil && !logschema.TsInRange(t) {
+			err = errors.New("outside the ts range")
+		}
 		if err != nil {
 			return nil, fmt.Errorf("NISSHI_FAKE_NOW: %w", err)
 		}
