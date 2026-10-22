@@ -345,6 +345,10 @@ func (s *Server) doPush(w http.ResponseWriter, r *http.Request) int {
 			w.WriteHeader(http.StatusInsufficientStorage)
 			return http.StatusInsufficientStorage
 		}
+		if errors.Is(err, store.ErrSealedDay) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return http.StatusServiceUnavailable
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return http.StatusInternalServerError
 	}

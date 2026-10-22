@@ -39,6 +39,7 @@ each object (storage-format, "Records"). The agent already wrote `node`, `stream
 | the request itself invalid: `node` ≠ authenticated node, malformed `stream_id`, `first_seq` = 0 | nothing | 400, `PushRejected{reason}` without index |
 | the stream was first pushed by another node, or is nisshi's reserved stream (0014) | nothing | 403, `PushRejected{reason: "stream-owner"}` without index |
 | free space below `disk_reserve`, or a write error | rolls back to last commit | 507 |
+| the store's clock puts the batch on a sealed day (0006 amendment) | nothing | 503 |
 | body too large | nothing | 413 |
 
 A batch is all or nothing. Delivery is at least once on the wire, exactly once on disk.

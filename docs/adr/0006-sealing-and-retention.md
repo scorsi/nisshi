@@ -41,3 +41,11 @@ Review findings on the seal path (nisshi review §2.1, §2.13):
 - **A failed seal holds back its node**: when a day of a node fails to seal, the later days of
   that node are not sealed either (reported as errors) until it is fixed, since the chain would
   otherwise link past it and could not take it back.
+- **A sealed day is never reopened** (nisshi review §2.6). The file day is the store's receive
+  day, so only the store's own clock can put a batch on a past day (a clock stepped back, or
+  a jump forward then corrected). When the receive day of a batch is a sealed day of the node,
+  or earlier than its newest sealed day (the chain is closed there), the whole push is refused
+  with **503**, nothing changes on disk, and nisshi logs an `error` event (`push-failed`). The
+  agent keeps its spool and retries with back-off; pushes succeed again once the clock is right.
+  Old event timestamps are not affected: a late batch is stored in the current receive day as
+  before.

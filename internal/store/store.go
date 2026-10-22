@@ -38,6 +38,11 @@ var ErrDisk = errors.New("disk")
 // or for nisshi's own stream (ADR 0014, HTTP 403 `stream-owner`).
 var ErrStreamOwner = errors.New("stream-owner")
 
+// ErrSealedDay is returned by Push when the store's clock puts the batch on a day of the node
+// that is sealed, or before its newest sealed day: the chain is closed there (ADR 0006
+// amendment, HTTP 503). Nothing is written; the agent keeps its spool and retries.
+var ErrSealedDay = errors.New("receive day already sealed")
+
 // errPublished: the rename of an atomic write happened, the directory sync after it failed. The
 // new file may or may not survive a power loss; the old one is gone from the namespace.
 var errPublished = errors.New("published, directory sync failed")
@@ -315,6 +320,18 @@ func (s *Store) Push(b Batch) (Result, error) {
 		fmt.Fprintf(&lines, `{"v":1,"ts":%q,"level":"warn","event":"seq-gap","node":%q,"service":"nisshi","stream":%q,"seq":%d,"gap_stream":%q,"from_seq":%d,"to_seq":%d%s`,
 			ts, b.Node, GapStream, ownSeq, b.Stream, st.Hwm+1, b.FirstSeq-1, recv)
 	}
+	day := now.Format("2006-01-02")
+	key := b.Node + "/" + day
+	committed, open := s.st.Days[key]
+	if !open {
+		last, err := s.sealedThrough(b.Node)
+		if err != nil {
+			return r, err
+		}
+		if day <= last {
+			return r, fmt.Errorf("%w: %s, %s sealed through %s: store clock behind?", ErrSealedDay, day, b.Node, last)
+		}
+	}
 	free, err := s.FreeBytes()
 	if err != nil {
 		return r, err
@@ -322,9 +339,6 @@ func (s *Store) Push(b Batch) (Result, error) {
 	if free < s.reserve {
 		return r, fmt.Errorf("%w: %d bytes free, reserve %d", ErrDisk, free, s.reserve)
 	}
-	day := now.Format("2006-01-02")
-	key := b.Node + "/" + day
-	committed := s.st.Days[key]
 	frameLen, err := s.appendFrame(b.Node, day, committed, lines.Bytes())
 	if err != nil {
 		return r, s.rollback(s.dataPath(b.Node, day), committed, err)
@@ -366,6 +380,21 @@ func (s *Store) Push(b Batch) (Result, error) {
 	}
 	r.Acked = ns.Hwm
 	return r, nil
+}
+
+// sealedThrough is the newest sealed day of a node, "" when none.
+func (s *Store) sealedThrough(node string) (string, error) {
+	entries, err := os.ReadDir(filepath.Join(s.root, node))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	last := ""
+	for _, e := range entries {
+		if d, ok := strings.CutSuffix(e.Name(), ".manifest.json"); ok && d > last {
+			last = d
+		}
+	}
+	return last, err
 }
 
 // CheckOwner refuses a stream that another node pushed first, and nisshi's own stream (ADR

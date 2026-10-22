@@ -609,3 +609,37 @@ func TestStreamOwner(t *testing.T) {
 		t.Errorf("racing first pushes: %v, %v", e1, e2)
 	}
 }
+
+// The store's clock back on a sealed day, or before the newest one: the push fails, nothing
+// changes on disk, and pushes succeed again once the clock is right (ADR 0006 amendment).
+func TestClockBackOnSealedDay(t *testing.T) {
+	root := t.TempDir()
+	c := &clock{day0}
+	s := open(t, root, c)
+	s.Push(batch(1, 10))
+	c.t = day0.AddDate(0, 0, 1)
+	s.SealPast()
+	data, _ := os.ReadFile(s.dataPath("node-a", "2026-10-19"))
+	manifest, _ := os.ReadFile(s.manifestPath("node-a", "2026-10-19"))
+	for _, back := range []time.Time{day0.Add(11 * time.Hour), day0.AddDate(0, 0, -3)} {
+		c.t = back
+		if _, err := s.Push(batch(11, 5)); !errors.Is(err, ErrSealedDay) {
+			t.Errorf("%v: %v", back, err)
+		}
+	}
+	d2, _ := os.ReadFile(s.dataPath("node-a", "2026-10-19"))
+	m2, _ := os.ReadFile(s.manifestPath("node-a", "2026-10-19"))
+	if !bytes.Equal(data, d2) || !bytes.Equal(manifest, m2) || s.Streams()[streamA].Hwm != 10 {
+		t.Error("sealed day or state changed")
+	}
+	if ls, _ := filepath.Glob(filepath.Join(root, "node-a", "*")); len(ls) != 2 {
+		t.Errorf("files %v", ls)
+	}
+	c.t = day0.AddDate(0, 0, 1)
+	if r, err := s.Push(batch(11, 5)); err != nil || r.Acked != 15 {
+		t.Errorf("clock right again: %+v %v", r, err)
+	}
+	if err := Verify(root, os.Stderr); err != nil {
+		t.Error(err)
+	}
+}

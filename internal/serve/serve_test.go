@@ -319,3 +319,16 @@ func TestErrorLogIsSchema(t *testing.T) {
 		t.Fatal("no log line")
 	}
 }
+
+// A push the store's clock puts on a sealed day: 503, so the agent keeps its spool and retries.
+func TestSealedDay503(t *testing.T) {
+	s, ts, logs := newTestServer(t, 0)
+	os.MkdirAll(filepath.Join(s.cfg.DataDir, "node-a"), 0o750)
+	os.WriteFile(filepath.Join(s.cfg.DataDir, "node-a", "2026-10-19.manifest.json"), []byte("{}"), 0o640)
+	if code, _, _ := push(t, ts.URL, pushOpts{first: 1, records: records("node-a", 1, 2)}); code != 503 {
+		t.Errorf("code %d", code)
+	}
+	if !strings.Contains(logs.String(), `"level":"error"`) || !strings.Contains(logs.String(), "sealed") {
+		t.Errorf("no error event: %s", logs)
+	}
+}
