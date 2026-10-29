@@ -155,7 +155,7 @@ in
   # retention (2 days) keeping manifests, nisshi read across sealed and open days.
   vm-seal = mkTest "seal" 2 ''
     def day(d):
-        machine.succeed(f"systemctl set-environment NISSHI_FAKE_NOW=2026-10-{d}T12:00:00Z && systemctl restart nisshi")
+        machine.succeed(f"systemctl set-environment NISSHI_FAKE_NOW=2026-10-{d}T12:00:00Z && systemctl reset-failed nisshi && systemctl restart nisshi")
         machine.wait_for_open_port(9473)
 
     def push(scenario):
@@ -184,7 +184,7 @@ in
                      f'and (.sealed_at | startswith("2026-10-20T12:00:00"))')
         machine.succeed(f"zstdcat {data} | jq -c . | wc -l | grep -qx 25")
         before = sha256("${root}/node-a/2026-10-19.manifest.json")
-        machine.succeed("systemctl restart nisshi")  # idempotent
+        machine.succeed("systemctl reset-failed nisshi && systemctl restart nisshi")  # idempotent
         machine.wait_for_open_port(9473)
         assert sha256("${root}/node-a/2026-10-19.manifest.json") == before, "seal rewrote the manifest"
         machine.succeed("ls ${root}/node-a | grep -c manifest | grep -qx 1")
