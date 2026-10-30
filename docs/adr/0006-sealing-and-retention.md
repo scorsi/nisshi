@@ -16,6 +16,10 @@ never a reaction to disk pressure.
   hash, rename over the original, write the manifest (temporary + rename), drop the file from
   `state.json`. A line that is not valid JSON stops the seal of that file
   (`nisshi_seals_total{result="error"}`, `error` log); the file stays as is.
+- **The daily seal and retention take the push slot** (ADR 0003 amendment), so their memory
+  never adds to a push's: they wait for the push under way, and a push arriving meanwhile waits
+  for them, up to its admission deadline (then 503). The slot is granted in arrival order, so a
+  steady flow of pushes never starves the seal. The start-up seal runs before the listeners open.
 - **Retention**: default **400 days** (a year of baseline plus a margin for year-on-year
   comparison), `0` keeps everything (TOML has no null). The daily job deletes the data files of sealed days
   older than that and **keeps their manifests**, so the chain stays verifiable.

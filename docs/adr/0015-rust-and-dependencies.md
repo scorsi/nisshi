@@ -47,6 +47,8 @@ the Go implementation are:
   amendment) neither seals nor deletes until a restart; a `nisshi read` duration whose terms
   add up past the range is invalid (Go wrapped it to 0). `seq` arithmetic is overflow-checked
   up to u64::MAX, with the same answers as before.
+- **Seal and pushes**: the daily seal and retention take the push slot (ADR 0006); Go ran
+  them beside a push, so their memory could add up.
 - **Metadata JSON**: `state.json` and manifests are read with `serde_json`, which is stricter
   than Go's `encoding/json` on files the store never writes: member names match exactly, a
   repeated member or a lone surrogate escape is an error.

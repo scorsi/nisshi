@@ -990,6 +990,85 @@ async fn deadlines() {
     }
 }
 
+/// Holds the store lock from another thread until the returned sender is dropped: a seal that
+/// has the push slot stays inside it.
+fn hold_store(app: &Arc<App>) -> std::sync::mpsc::Sender<()> {
+    let (locked, is_locked) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let store = app.store.clone();
+    std::thread::spawn(move || {
+        let _held = store.lock().unwrap();
+        locked.send(()).unwrap();
+        let _ = released.recv();
+    });
+    is_locked.recv().unwrap();
+    release
+}
+
+/// The seal takes the push slot: it waits for a push, a push arriving during a seal waits for it
+/// (503 with `Connection: close` past the admission deadline), and pushes queued after a seal
+/// do not overtake it.
+#[tokio::test]
+async fn seal_takes_the_push_slot() {
+    let app = new_app(Deadlines {
+        admit: Duration::from_millis(300),
+        ..DEADLINES
+    });
+    let addr = start(app.clone()).await;
+    let slot = app.pushing.clone().acquire_owned().await.unwrap();
+    let seal = tokio::spawn(seal_turn(app.clone()));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!seal.is_finished(), "sealed while a push holds the slot");
+    drop(slot);
+    seal.await.unwrap();
+
+    let release = hold_store(&app);
+    let seal = tokio::spawn(seal_turn(app.clone()));
+    while app.pushing.available_permits() > 0 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (code, head, _) = http(
+        addr,
+        "POST /v1/push HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer tok-a\r\nContent-Encoding: zstd\r\nContent-Length: 100\r\n\r\n".into(),
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(code, 503, "{head}");
+    assert!(head.to_lowercase().contains("connection: close"), "{head}");
+    drop(release);
+    seal.await.unwrap();
+
+    let app = new_app(Deadlines {
+        admit: Duration::from_secs(5),
+        ..DEADLINES
+    });
+    let addr = start(app.clone()).await;
+    let slot = app.pushing.clone().acquire_owned().await.unwrap();
+    let release = hold_store(&app);
+    let seal = tokio::spawn(seal_turn(app.clone()));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let waiting = tokio::spawn(push(
+        addr,
+        Push {
+            first: 1,
+            records: records("node-a", 1, 1),
+            ..Default::default()
+        },
+    ));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(slot);
+    // FIFO: the seal, queued first, has the slot and is held inside it; the push still waits.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(app.pushing.available_permits(), 0);
+    assert!(
+        !seal.is_finished() && !waiting.is_finished(),
+        "push overtook the seal"
+    );
+    drop(release);
+    seal.await.unwrap();
+    assert_eq!(waiting.await.unwrap().0, 200, "admitted after the seal");
+}
+
 #[test]
 fn seal_schedule() {
     let ns = |s: &str| nisshi_core::time::parse_ts_shape(s).unwrap() as i64;

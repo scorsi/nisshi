@@ -115,8 +115,8 @@ pub struct App {
     pub metrics: Metrics,
     pub cfg: Config,
     root: PathBuf,
-    /// One push at a time from body read to commit: the memory of a 64 MiB batch is budgeted
-    /// once (MemoryMax=128M); the others wait, unread, in their connection.
+    /// One push at a time from body read to commit, the seal included: the memory of a 64 MiB
+    /// batch is budgeted once (MemoryMax=128M); the others wait, unread, in their connection.
     pub pushing: Arc<Semaphore>,
     /// Last status of each node's agent, kept from accepted pushes only.
     agents: Mutex<BTreeMap<String, AgentStatus>>,
@@ -869,6 +869,23 @@ pub fn seal_and_retain(app: &App) {
     }
 }
 
+/// One seal and retention run on the push slot: its memory never adds to a push's. It waits
+/// its turn without a deadline: the semaphore is FIFO, so pushes queued after it wait for it and
+/// a timed-out push leaves the queue.
+pub async fn seal_turn(app: Arc<App>) {
+    let permit = app
+        .pushing
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("semaphore never closed");
+    let _ = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        seal_and_retain(&app)
+    })
+    .await;
+}
+
 /// Binds a listener; `:port` (no host) listens on every address, as Go does: IPv6 and IPv4
 /// on `[::]`, IPv4 alone on a host without IPv6.
 async fn bind(addr: &str) -> Result<TcpListener, String> {
@@ -946,8 +963,7 @@ pub fn run(cfg: Config) -> Result<(), String> {
                     .await
                     .unwrap_or_else(|_| nisshi_core::time::real_now_ns());
                 tokio::time::sleep(Duration::from_nanos(until_seal(now))).await;
-                let app = sched.clone();
-                let _ = tokio::task::spawn_blocking(move || seal_and_retain(&app)).await;
+                seal_turn(sched.clone()).await;
             }
         });
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

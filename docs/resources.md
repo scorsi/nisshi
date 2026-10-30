@@ -44,5 +44,5 @@ fixes):
 
 On the Go implementation the 64 MiB batch fitted `MemoryMax=128M` with about 10 % margin;
 hikyaku's batches (4 MiB) are far below. Whether the Rust server fits is not established: it is
-to be measured, under systemd, on the deployed node (M1). The seal does not take the push slot,
-so a seal and a push can hold their memory at the same time.
+to be measured, under systemd, on the deployed node (M1). The seal and retention take the push
+slot (ADR 0006): a seal and a push are serialised, their memory never adds up.
