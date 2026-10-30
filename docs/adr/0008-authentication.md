@@ -13,7 +13,8 @@ own records). hanko will issue public certificates first, then internal X.509-SV
 
 - **kekkai identity** (trust the overlay source address): ties the observability of the
   network to the network itself. Rejected: nisshi must be reachable over any path.
-- **mTLS with a private CA now**: a CA to run before hanko exists, which is hanko's job.
+- **mTLS with a private CA now**: a CA issuing every node's client certificate before hanko
+  exists, which is hanko's job.
 - **Per-node bearer token over TLS**: stdlib only, replaceable without changing the API.
 
 ## Decision
@@ -22,8 +23,10 @@ own records). hanko will issue public certificates first, then internal X.509-SV
   base64url. Config maps hex `sha256(token)` → identity (`node:<name>` or `reader`); the hashes
   are not secrets and live in plain Nix. Constant-time comparison. `node:<name>` may push
   records with `node = <name>` only; `reader` may only `GET /v1/status`.
-- **Server certificate**: files given in config. Before hanko: self-signed, pinned by agents
-  (`ca_file`), agents verify `server_name` so an IP address works without DNS.
+- **Server certificate**: files given in config. Before hanko: a leaf certificate signed by a
+  private CA, whose certificate agents pin (`ca_file`); a CA certificate used as the server's
+  own, or a bare self-signed one, is refused by common TLS stacks (rustls/webpki). Agents verify
+  `server_name` so an IP address works without DNS.
 - **Step 1, hanko public certificate**: nisshi's certificate comes from hanko, agents drop the
   pin. Tokens unchanged.
 - **Step 2, hanko SVIDs**: `auth.methods = [ "token", "mtls" ]`; a client certificate with
