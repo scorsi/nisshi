@@ -1,5 +1,5 @@
 [package]
-name = "nisshi-server"
+name = "nisshi-store"
 version.workspace = true
 edition.workspace = true
 description = "nisshi datastore: ingestion API, sealing, retention, status, metrics"

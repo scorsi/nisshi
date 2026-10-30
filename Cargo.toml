@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/nisshi-core", "crates/nisshi", "crates/nisshi-server", "crates/nisshi-testpush"]
+members = ["crates/nisshi-core", "crates/nisshi", "crates/nisshi-store", "crates/nisshi-testpush"]
 
 [workspace.package]
 version = "0.1.0-dev"
@@ -9,8 +9,8 @@ edition = "2024"
 # Direct dependencies are limited to ADR 0015.
 [workspace.dependencies]
 nisshi-core = { path = "crates/nisshi-core" }
-hyper = { version = "1", features = ["server", "http1", "http2", "client"] }
-hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
+hyper = { version = "1", features = ["server", "http1", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 prost = "0.13"
 prost-build = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
