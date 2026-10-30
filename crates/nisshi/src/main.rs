@@ -207,7 +207,11 @@ fn validate(stdin: &mut dyn BufRead, stderr: &mut dyn Write) -> u8 {
             }
         }
         stdin.consume(take + usize::from(newline));
-        if newline && let Some(code) = check(&mut line, &mut too_long, &mut n) {
+        // Past the limit the answer is known: never wait for the rest of the line (Go's
+        // Scanner fails as soon as its buffer is full).
+        if (newline || too_long)
+            && let Some(code) = check(&mut line, &mut too_long, &mut n)
+        {
             return code;
         }
     }
@@ -286,6 +290,27 @@ mod tests {
             ),
             2
         );
+    }
+
+    /// A line over the limit fails at once: nothing past it is read (validation P2).
+    #[test]
+    fn validate_fails_before_eof() {
+        struct Endless;
+        impl io::Read for Endless {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                panic!("read past the over-long line");
+            }
+        }
+        let long = vec![b'x'; logschema::MAX_LINE_BYTES + 2];
+        let mut stdin = io::BufReader::new(io::Read::chain(&long[..], Endless));
+        let mut err = Vec::new();
+        let code = run(
+            &["validate".into(), "--logs".into()],
+            &mut stdin,
+            &mut Vec::new(),
+            &mut err,
+        );
+        assert_eq!((code, &err[..]), (1, &b"line 1: line-too-large\n"[..]));
     }
 
     #[test]
