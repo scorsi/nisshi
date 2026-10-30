@@ -303,7 +303,38 @@ fn sh(cmd: &str) -> Res<()> {
     Ok(())
 }
 
-/// A member of a record as Go's `json.Unmarshal` into a map reads it.
+/// The members the oracle reads back from a stored line, parsed by serde_json, not by the
+/// store's own parser: a parser bug cannot hide itself. The other members are skipped.
+#[derive(Deserialize)]
+struct StoredMembers {
+    stream: Option<serde_json::Value>,
+    seq: Option<serde_json::Value>,
+    event: Option<serde_json::Value>,
+    service: Option<serde_json::Value>,
+    gap_stream: Option<serde_json::Value>,
+}
+
+/// `recv_ts` checked by hand, not with the store's validator: `<day>THH:MM:SS.nnnnnnnnnZ`.
+fn is_ts_of(ts: &str, day: &str) -> bool {
+    let b = ts.as_bytes();
+    let num = |at: usize, max: u32| {
+        ts.get(at..at + 2)
+            .filter(|n| n.bytes().all(|c| c.is_ascii_digit()))
+            .and_then(|n| n.parse::<u32>().ok())
+            .is_some_and(|n| n < max)
+    };
+    b.len() == 30
+        && ts.starts_with(day)
+        && day.len() == 10
+        && (b[10], b[13], b[16], b[19], b[29]) == (b'T', b':', b':', b'.', b'Z')
+        && num(11, 24)
+        && num(14, 60)
+        && num(17, 60)
+        && b[20..29].iter().all(u8::is_ascii_digit)
+}
+
+/// A member of a pushed fixture as Go's `json.Unmarshal` into a map reads it: only to build
+/// the request (stream_id, first_seq), the store's answer is what is checked.
 fn members(line: &[u8]) -> Option<Vec<(String, &[u8])>> {
     json::object_map(line).ok().flatten()
 }
@@ -543,31 +574,33 @@ impl Pusher {
                     return Err(bad());
                 }
                 let recv = std::str::from_utf8(&tail[12..42]).map_err(|_| bad())?;
-                let shape_ok = nisshi_core::logschema::record(
-                    format!(r#"{{"v":1,"ts":"{recv}","level":"info","event":"x","node":"a","service":"a","stream":"{}","seq":1}}"#, "0".repeat(32)).as_bytes(),
-                )
-                .is_empty();
-                if !shape_ok || !recv.starts_with(&day) {
+                if !is_ts_of(recv, &day) {
                     return Err(format!(
                         "{}: recv_ts {recv} not a ts of day {day}",
                         f.display()
                     ));
                 }
-                let m = members(line).ok_or_else(|| {
+                let m: StoredMembers = serde_json::from_slice(line).map_err(|e| {
                     format!(
-                        "{}: not a JSON object: {}",
+                        "{}: not a JSON object: {e}: {}",
                         f.display(),
                         String::from_utf8_lossy(line)
                     )
                 })?;
+                let text = |v: &Option<serde_json::Value>| {
+                    v.as_ref()
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
                 let mut s = Stored {
                     line: [&line[..line.len() - 44], b"}"].concat(),
-                    stream: str_of(&m, "stream"),
-                    seq: seq_of(&m).unwrap_or(0),
+                    stream: text(&m.stream),
+                    seq: m.seq.as_ref().and_then(|v| v.as_u64()).unwrap_or(0),
                     gap: String::new(),
                 };
-                if str_of(&m, "event") == "seq-gap" && str_of(&m, "service") == "nisshi" {
-                    s.gap = str_of(&m, "gap_stream");
+                if text(&m.event) == "seq-gap" && text(&m.service) == "nisshi" {
+                    s.gap = text(&m.gap_stream);
                 }
                 out.push(s);
             }
