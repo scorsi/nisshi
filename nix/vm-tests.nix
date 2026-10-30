@@ -6,11 +6,7 @@ self:
 let
   inherit (pkgs) lib;
   nisshi = self.packages.${pkgs.stdenv.hostPlatform.system}.nisshi;
-  testpush = nisshi.overrideAttrs {
-    pname = "nisshi-testpush";
-    subPackages = [ "cmd/nisshi-testpush" ];
-    doCheck = false;
-  };
+  testpush = nisshi.passthru.testpush;
   fixtures = self.lib.fixtures;
 
   certs = pkgs.runCommand "nisshi-test-certs" { nativeBuildInputs = [ pkgs.openssl ]; } ''

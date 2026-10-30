@@ -1,10 +1,12 @@
-# `nix flake check` (ADR 0011). The package's own check phase runs `go vet` and `go test`
-# (every fixture line through the validator, every log-schema.md example a valid fixture).
+# `nix flake check` (ADR 0011): the Rust tests (every fixture line through the validator, every
+# log-schema.md example a valid fixture, the store and server tests), clippy, the fixtures through
+# the real binary, the schema, the scenarios' format, the module.
 {
   self,
   pkgs,
   lib,
   nisshi,
+  craneLib,
 }:
 let
   fixtures = ../fixtures;
@@ -12,32 +14,31 @@ in
 {
   inherit nisshi;
 
-  # The committed gen/ is what `buf generate` produces from proto/.
-  proto-generated =
-    pkgs.runCommand "nisshi-proto-generated"
-      {
-        nativeBuildInputs = [
-          pkgs.buf
-          pkgs.protoc-gen-go
+  cargo-test = craneLib.cargoTest (
+    nisshi.passthru.common // { inherit (nisshi.passthru) cargoArtifacts; }
+  );
+  cargo-clippy = craneLib.cargoClippy (
+    nisshi.passthru.common
+    // {
+      inherit (nisshi.passthru) cargoArtifacts;
+      cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
+    }
+  );
+
+  buf-lint = pkgs.runCommand "nisshi-buf-lint" { nativeBuildInputs = [ pkgs.buf ]; } ''
+    export HOME=$TMPDIR
+    cd ${
+      lib.fileset.toSource {
+        root = ../.;
+        fileset = lib.fileset.unions [
+          ../buf.yaml
+          ../proto
         ];
-        src = lib.fileset.toSource {
-          root = ../.;
-          fileset = lib.fileset.unions [
-            ../buf.yaml
-            ../buf.gen.yaml
-            ../proto
-            ../gen
-          ];
-        };
       }
-      ''
-        export HOME=$TMPDIR
-        cp -r $src work && chmod -R u+w work && cd work
-        rm -r gen
-        buf generate
-        diff -r $src/gen gen || { echo "gen/ is stale: run buf generate"; exit 1; }
-        touch $out
-      '';
+    }
+    buf lint
+    touch $out
+  '';
 
   # The real binary, through lib.validateLogs, `nisshi validate --logs` on every service-line fixture: verdict and reason.
   fixtures-cli =

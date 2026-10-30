@@ -1,5 +1,6 @@
-# NixOS module for nisshi (milestone M1): renders the TOML of `nisshi serve` with
-# pkgs.formats.toml and runs nisshi.service hardened as genkan's module (ADR 0003, 0006, 0008).
+# NixOS module for nisshi (milestone M1): renders the TOML of `nisshi-store` with
+# pkgs.formats.toml, checked at build time with `nisshi-store check-config` (ADR 0016), and runs
+# nisshi.service hardened as genkan's module (ADR 0003, 0006, 0008).
 self:
 {
   config,
@@ -12,7 +13,7 @@ let
   cfg = config.services.nisshi;
   toml = pkgs.formats.toml { };
   credentials = "/run/credentials/nisshi.service";
-  configFile = toml.generate "nisshi.toml" (
+  rendered = toml.generate "nisshi.toml" (
     {
       inherit (cfg) listen;
       data_dir = cfg.dataDir;
@@ -26,6 +27,10 @@ let
     }
     // lib.optionalAttrs (cfg.metrics.listen != null) { listen_metrics = cfg.metrics.listen; }
   );
+  configFile = pkgs.runCommand "nisshi.toml" { nativeBuildInputs = [ cfg.package ]; } ''
+    nisshi-store check-config ${rendered}
+    cp ${rendered} $out
+  '';
 in
 {
   options.services.nisshi = {
@@ -41,7 +46,7 @@ in
     listen = mkOption {
       type = types.nonEmptyListOf types.str;
       example = [ "[2001:db8::10]:9473" ];
-      description = "Go `host:port` addresses of the HTTPS ingestion API (ADR 0003). No firewall port is opened.";
+      description = "`host:port` addresses of the HTTPS ingestion API (ADR 0003); `:port` listens on every address. No firewall port is opened.";
     };
 
     dataDir = mkOption {
@@ -124,10 +129,12 @@ in
       wantedBy = [ "multi-user.target" ];
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
+      # No effect on the Rust server; kept so that the unit's environment, which the acceptance
+      # nixosTests assert, is unchanged (ADR 0015).
       environment.GOMEMLIMIT = "64MiB";
       serviceConfig = {
         Type = "notify";
-        ExecStart = "${lib.getExe cfg.package} serve ${configFile}";
+        ExecStart = "${cfg.package}/bin/nisshi-store serve ${configFile}";
         Restart = "on-failure";
         User = "nisshi";
         Group = "nisshi";
