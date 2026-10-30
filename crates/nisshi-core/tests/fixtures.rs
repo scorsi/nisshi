@@ -75,13 +75,20 @@ fn load(name: &str) -> Vec<Fixture> {
 #[test]
 fn fixtures() {
     for (name, check) in [
-        ("service-lines.ndjson", logschema::line as fn(&[u8]) -> String),
+        (
+            "service-lines.ndjson",
+            logschema::line as fn(&[u8]) -> String,
+        ),
         ("records.ndjson", logschema::record),
     ] {
         for (i, f) in load(name).iter().enumerate() {
             let b = f.bytes();
             if name == "service-lines.ndjson" {
-                assert!(!b.contains(&b'\n'), "{name}:{}: a service line holds no newline", i + 1);
+                assert!(
+                    !b.contains(&b'\n'),
+                    "{name}:{}: a service line holds no newline",
+                    i + 1
+                );
             }
             assert_eq!(check(&b), f.reason, "{name}:{}", i + 1);
         }
@@ -104,6 +111,9 @@ fn schema_examples_are_fixtures() {
     let examples: Vec<&str> = doc.lines().filter(|l| l.starts_with("{\"v\":1")).collect();
     assert!(!examples.is_empty(), "no example found in log-schema.md");
     for e in examples {
-        assert!(valid.iter().any(|v| v == e), "log-schema.md example is not a valid fixture: {e}");
+        assert!(
+            valid.iter().any(|v| v == e),
+            "log-schema.md example is not a valid fixture: {e}"
+        );
     }
 }

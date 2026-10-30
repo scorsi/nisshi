@@ -177,8 +177,7 @@ fn check(b: &[u8], record: bool) -> Result<Vec<(String, &[u8])>, String> {
         }
     }
     for (k, _) in &obj {
-        if k == "recv_ts" || k.starts_with('_') || (!record && AGENT_FIELDS.contains(&k.as_str()))
-        {
+        if k == "recv_ts" || k.starts_with('_') || (!record && AGENT_FIELDS.contains(&k.as_str())) {
             return Err(format!("reserved-field:{k}"));
         }
     }

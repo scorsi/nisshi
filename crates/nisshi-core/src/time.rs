@@ -391,7 +391,10 @@ mod tests {
         let ns = |s| parse_rfc3339(s).unwrap();
         assert_eq!(ns("2026-10-19T08:00:00Z"), ns("2026-10-19T10:00:00+02:00"));
         assert_eq!(ns("2026-10-19T8:00:00.5Z") % 1_000_000_000, 500_000_000);
-        assert_eq!(ns("2026-10-19T08:00:00,123456789999Z") % 1_000_000_000, 123_456_789);
+        assert_eq!(
+            ns("2026-10-19T08:00:00,123456789999Z") % 1_000_000_000,
+            123_456_789
+        );
         assert_eq!(
             parse_rfc3339("yesterday").unwrap_err(),
             r#"parsing time "yesterday" as "2006-01-02T15:04:05.999999999Z07:00": cannot parse "yesterday" as "2006""#

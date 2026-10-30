@@ -198,9 +198,12 @@ pub fn members(b: &[u8]) -> Option<Vec<(String, &[u8])>> {
     }
 }
 
+/// Top-level members: unescaped name, raw value.
+pub type Members<'a> = Vec<(String, &'a [u8])>;
+
 /// Parses a whole text with Go's `json.Unmarshal` into `map[string]json.RawMessage`: `Ok(None)`
 /// for `null`, an error for invalid JSON or another type; a repeated name keeps its last value.
-pub fn object_map(b: &[u8]) -> Result<Option<Vec<(String, &[u8])>>, String> {
+pub fn object_map(b: &[u8]) -> Result<Option<Members<'_>>, String> {
     if !valid(b) {
         return Err("invalid JSON".into());
     }
@@ -412,7 +415,10 @@ mod tests {
         assert_eq!(unquote(br#""\ud800""#).unwrap(), "\u{fffd}");
         assert_eq!(unquote(br#""\ud800\u0041""#).unwrap(), "\u{fffd}A");
         assert_eq!(unquote(br#""\udc00x""#).unwrap(), "\u{fffd}x");
-        assert_eq!(unquote(&[b'"', 0xe2, 0x82, b'"']).unwrap(), "\u{fffd}\u{fffd}");
+        assert_eq!(
+            unquote(&[b'"', 0xe2, 0x82, b'"']).unwrap(),
+            "\u{fffd}\u{fffd}"
+        );
         assert!(unquote(b"1").is_none() && unquote(br#""a" "#).is_none());
     }
 
@@ -435,9 +441,6 @@ mod tests {
             quote("a<b>&\"\\\u{8}\u{1}\u{2028}é", Style::Marshal),
             r#""a\u003cb\u003e\u0026\"\\\b\u0001\u2028é""#
         );
-        assert_eq!(
-            quote("a<b\u{8}\t", Style::Slog),
-            r#""a<b\u0008\t""#
-        );
+        assert_eq!(quote("a<b\u{8}\t", Style::Slog), r#""a<b\u0008\t""#);
     }
 }
