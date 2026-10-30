@@ -11,8 +11,12 @@ let
 
   certs = pkgs.runCommand "nisshi-test-certs" { nativeBuildInputs = [ pkgs.openssl ]; } ''
     mkdir $out && cd $out
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=nisshi-test \
-      -addext subjectAltName=IP:127.0.0.1 -keyout server.key -out server.pem
+    # A test CA and a leaf signed by it: rustls refuses a CA certificate as the server's own.
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=nisshi-test-ca \
+      -keyout ca.key -out ca.pem
+    openssl req -newkey rsa:2048 -nodes -subj /CN=localhost -keyout server.key -out server.csr
+    openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 3650 \
+      -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1') -out server.pem
   '';
 
   tokens = {
@@ -67,7 +71,7 @@ let
     };
 
   pusher = lib.concatStringsSep " " [
-    "nisshi-testpush --url ${url} --ca ${certs}/server.pem --node node-a --other-node node-b"
+    "nisshi-testpush --url ${url} --ca ${certs}/ca.pem --node node-a --other-node node-b"
     "--token-valid ${tokens.node-a} --token-other-node ${tokens.node-b} --root ${root}"
     "--restart 'systemctl kill -s KILL nisshi; systemctl start nisshi'"
     "--fill 'dd if=/dev/zero of=${root}/fill bs=1M count=28 status=none' --free 'rm ${root}/fill'"
@@ -85,7 +89,7 @@ let
         machine.succeed("systemctl show -P Environment nisshi | grep -q GOMEMLIMIT=64MiB")
 
     def status():
-        return machine.succeed("curl -sS --cacert ${certs}/server.pem -H 'Authorization: Bearer ${tokens.reader}' ${url}/v1/status")
+        return machine.succeed("curl -sS --cacert ${certs}/ca.pem -H 'Authorization: Bearer ${tokens.reader}' ${url}/v1/status")
 
     machine.wait_for_unit("nisshi.service")
     machine.wait_for_open_port(9473)
@@ -108,7 +112,7 @@ in
         print(machine.succeed("${pusher} $(grep -L '\"restart\"' ${fixtures}/delivery/*.json)"))
 
     with subtest("a reader token may not push (ADR 0013)"):
-        code = machine.succeed("curl -sS -o /dev/null -w '%{http_code}' --cacert ${certs}/server.pem -H 'Authorization: Bearer ${tokens.reader}' -H 'Content-Encoding: zstd' --data-binary x ${url}/v1/push")
+        code = machine.succeed("curl -sS -o /dev/null -w '%{http_code}' --cacert ${certs}/ca.pem -H 'Authorization: Bearer ${tokens.reader}' -H 'Content-Encoding: zstd' --data-binary x ${url}/v1/push")
         assert code == "403", code
 
     with subtest("metrics on loopback, in the convention"):
@@ -132,7 +136,7 @@ in
         s = status()
         machine.succeed(f"jq -e '(.streams | length) >= 10 and .diskReserveBytes == \"${toString (8 * mib)}\" and .chainHeads == {{}}' <<'EOF'\n{s}\nEOF")
         def status_code(auth: str) -> str:
-            return machine.succeed(f"curl -sS -o /dev/null -w '%{{http_code}}' --cacert ${certs}/server.pem {auth} ${url}/v1/status")
+            return machine.succeed(f"curl -sS -o /dev/null -w '%{{http_code}}' --cacert ${certs}/ca.pem {auth} ${url}/v1/status")
         assert status_code("-H 'Authorization: Bearer ${tokens.node-a}'") == "403"  # ADR 0013
         assert status_code("-H 'Authorization: Bearer unknown'") == "401"
         assert status_code("") == "401"
