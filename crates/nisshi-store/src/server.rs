@@ -20,12 +20,13 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::io::Read;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
@@ -234,30 +235,21 @@ fn forbid_stream(node: &str, stream: &str) -> Response<Full> {
     refuse(StatusCode::FORBIDDEN, None, "stream-owner")
 }
 
-pub async fn handle(
-    app: Arc<App>,
-    req: Request<Incoming>,
-) -> Result<Response<Full>, std::io::Error> {
+pub async fn handle(app: Arc<App>, req: Request<Incoming>) -> Result<Response<Full>, Infallible> {
     let start = Instant::now();
-    let work = async {
-        match req.uri().path() {
-            "/v1/push" if req.method() == Method::POST => {
-                let r = push(&app, req, start).await;
-                app.metrics.add("pushes", r.status().as_str(), 1);
-                r
-            }
-            "/v1/push" => not_allowed("POST"),
-            "/v1/status" if req.method() == Method::GET || req.method() == Method::HEAD => {
-                status(&app, &req).await
-            }
-            "/v1/status" => not_allowed("GET, HEAD"),
-            _ => text(StatusCode::NOT_FOUND, "404 page not found"),
+    Ok(match req.uri().path() {
+        "/v1/push" if req.method() == Method::POST => {
+            let r = push(&app, req, start).await;
+            app.metrics.add("pushes", r.status().as_str(), 1);
+            r
         }
-    };
-    // The write deadline ends the connection; a commit under way still completes.
-    tokio::time::timeout(app.deadlines.write, work)
-        .await
-        .map_err(|_| std::io::Error::other("write deadline"))
+        "/v1/push" => not_allowed("POST"),
+        "/v1/status" if req.method() == Method::GET || req.method() == Method::HEAD => {
+            status(&app, &req).await
+        }
+        "/v1/status" => not_allowed("GET, HEAD"),
+        _ => text(StatusCode::NOT_FOUND, "404 page not found"),
+    })
 }
 
 fn content_length<B>(req: &Request<B>) -> Option<u64> {
@@ -351,7 +343,7 @@ fn commit(app: &App, node: &str, body: Vec<u8>) -> Response<Full> {
             Err(r) => r,
             Ok(f) if f.node != node => "node-mismatch".into(),
             Ok(f) if f.stream != stream => "stream-mismatch".into(),
-            Ok(f) if f.seq != req.first_seq.wrapping_add(i as u64) => "seq-mismatch".into(),
+            Ok(f) if Some(f.seq) != req.first_seq.checked_add(i as u64) => "seq-mismatch".into(),
             Ok(f) => {
                 if f.ts > last_ts {
                     last_ts = f.ts;
@@ -402,20 +394,35 @@ fn commit(app: &App, node: &str, body: Vec<u8>) -> Response<Full> {
     )
 }
 
-/// The transport frame decoded: `Err(None)` past 64 MiB (413), `Err(Some(()))` not zstd.
+/// The transport frames decoded: `Err(None)` past 64 MiB (413), `Err(Some(()))` not zstd. As
+/// Go's decoder, frame by frame: one whose header declares more than the budget left (a
+/// single-segment frame's window too) is 413 before it is decoded; no frame at all is empty.
 fn decompress(body: &[u8]) -> Result<Vec<u8>, Option<()>> {
+    use zstd::zstd_safe::{find_frame_compressed_size, get_frame_content_size};
     let mut raw = Vec::new();
-    if body.is_empty() {
-        return Ok(raw); // no frame at all, as Go's decoder reads it
+    let mut rest = body;
+    while !rest.is_empty() {
+        let left = MAX_DECOMPRESSED - raw.len();
+        if let Ok(Some(n)) = get_frame_content_size(rest)
+            && n > left as u64
+        {
+            return Err(None);
+        }
+        // A frame whose end is not found is decoded with what follows: it fails there, or
+        // first runs past the limit (413), as Go's.
+        let (frame, next) = rest.split_at(find_frame_compressed_size(rest).unwrap_or(rest.len()));
+        let decoded = zstd::stream::read::Decoder::with_buffer(frame).and_then(|d| {
+            let mut d = d.single_frame();
+            d.window_log_max(WINDOW_LOG_MAX)?;
+            d.take(left as u64 + 1).read_to_end(&mut raw)
+        });
+        if raw.len() > MAX_DECOMPRESSED {
+            return Err(None);
+        }
+        decoded.map_err(|_| Some(()))?;
+        rest = next;
     }
-    let decoded = zstd::stream::read::Decoder::with_buffer(body).and_then(|mut d| {
-        d.window_log_max(WINDOW_LOG_MAX)?;
-        d.take(MAX_DECOMPRESSED as u64 + 1).read_to_end(&mut raw)
-    });
-    if raw.len() > MAX_DECOMPRESSED {
-        return Err(None);
-    }
-    decoded.map(|_| raw).map_err(|_| Some(()))
+    Ok(raw)
 }
 
 /// A decoded `PushRequest`, records aliasing the body.
@@ -586,9 +593,16 @@ fn status_body(app: &App) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// On bytes: a key of `state.json` is not always ASCII, slicing the `str` could panic.
 fn unhex(hex: &str) -> Vec<u8> {
-    (0..hex.len() / 2)
-        .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap_or(0))
+    hex.as_bytes()
+        .chunks_exact(2)
+        .map(|p| {
+            std::str::from_utf8(p)
+                .ok()
+                .and_then(|p| u8::from_str_radix(p, 16).ok())
+                .unwrap_or(0)
+        })
         .collect()
 }
 
@@ -677,18 +691,108 @@ fn builder(deadlines: Deadlines) -> hyper::server::conn::http1::Builder {
     b
 }
 
-/// One connection, HTTP/1.1.
+/// One connection, HTTP/1.1. The write deadline runs from the end of a request's headers to
+/// the end of its response, writing included: past it the connection is dropped, as Go's socket
+/// deadline does. A commit under way completes in its blocking task all the same.
 pub async fn serve_connection<I>(io: I, app: Arc<App>)
 where
     I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let b = builder(app.deadlines);
-    let _ = b
+    let write = app.deadlines.write;
+    let deadline = Arc::new(Mutex::new(None::<Instant>));
+    let set = deadline.clone();
+    let conn = builder(app.deadlines).serve_connection(
+        TokioIo::new(io),
+        service_fn(move |req| {
+            *set.lock().unwrap() = Some(Instant::now() + write);
+            handle(app.clone(), req)
+        }),
+    );
+    tokio::pin!(conn);
+    loop {
+        // Between requests the header deadline closes an idle connection.
+        let until = deadline
+            .lock()
+            .unwrap()
+            .unwrap_or_else(|| Instant::now() + write);
+        tokio::select! {
+            _ = &mut conn => return,
+            _ = tokio::time::sleep_until(until) => {
+                if deadline.lock().unwrap().is_some_and(|d| d <= Instant::now()) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// One ingestion connection: the TLS handshake under the header deadline, then HTTP. A failed
+/// handshake is a schema line, as the Go server's `ErrorLog` wrote it.
+async fn serve_tls(tls: TlsAcceptor, tcp: TcpStream, peer: SocketAddr, app: Arc<App>) {
+    let err = match tokio::time::timeout(app.deadlines.header, tls.accept(tcp)).await {
+        Ok(Ok(stream)) => return serve_connection(stream, app).await,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => "EOF".to_string(),
+        Ok(Err(e)) => e.to_string(),
+        Err(_) => "i/o timeout".to_string(),
+    };
+    log::warn(
+        "http-error",
+        &[(
+            "err",
+            Val::Str(&format!("http: TLS handshake error from {peer}: {err}")),
+        )],
+    );
+}
+
+/// One `/metrics` connection, plain HTTP on loopback.
+async fn serve_metrics(tcp: TcpStream, app: Arc<App>) {
+    let _ = builder(app.deadlines)
         .serve_connection(
-            TokioIo::new(io),
-            service_fn(move |req| handle(app.clone(), req)),
+            TokioIo::new(tcp),
+            service_fn(move |req| metrics_handle(app.clone(), req)),
         )
         .await;
+}
+
+/// Go's `Temporary` accept errors, which net/http retries: ENFILE and EMFILE (the same numbers
+/// on Linux and the BSDs), an interrupted call, a connection reset or aborted before accept.
+fn accept_retryable(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{
+        ConnectionAborted, ConnectionReset, Interrupted, TimedOut, WouldBlock,
+    };
+    matches!(
+        e.kind(),
+        Interrupted | WouldBlock | ConnectionReset | ConnectionAborted | TimedOut
+    ) || matches!(e.raw_os_error(), Some(23 | 24))
+}
+
+/// Accepts connections until a permanent error, which it returns. A transient one is logged
+/// and retried after a backoff, 5 ms doubling up to 1 s, as net/http does.
+async fn accept_loop(listener: TcpListener, conn: impl Fn(TcpStream, SocketAddr)) -> String {
+    let mut delay = Duration::ZERO;
+    loop {
+        match listener.accept().await {
+            Ok((tcp, peer)) => {
+                delay = Duration::ZERO;
+                conn(tcp, peer);
+            }
+            Err(e) if accept_retryable(&e) => {
+                delay = (delay * 2).clamp(Duration::from_millis(5), Duration::from_secs(1));
+                let msg = format!(
+                    "http: Accept error: {}; retrying in {delay:?}",
+                    nisshi_core::store::errno_text(&e)
+                );
+                log::warn("http-error", &[("err", Val::Str(&msg))]);
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => {
+                let addr = listener
+                    .local_addr()
+                    .map_or(String::new(), |a| a.to_string());
+                return format!("accept tcp {addr}: {}", nisshi_core::store::errno_text(&e));
+            }
+        }
+    }
 }
 
 /// `sd_notify` by hand over `NOTIFY_SOCKET` (`Type=notify`); a no-op outside such a unit.
@@ -765,15 +869,19 @@ pub fn seal_and_retain(app: &App) {
     }
 }
 
-/// Binds a listener; `:port` (no host) listens on every address, as Go does.
+/// Binds a listener; `:port` (no host) listens on every address, as Go does: IPv6 and IPv4
+/// on `[::]`, IPv4 alone on a host without IPv6.
 async fn bind(addr: &str) -> Result<TcpListener, String> {
-    let a = match addr.strip_prefix(':') {
-        Some(port) => format!("[::]:{port}"),
-        None => addr.to_string(),
+    let bound = match addr.strip_prefix(':') {
+        Some(port) => match TcpListener::bind(format!("[::]:{port}")).await {
+            Err(e) => TcpListener::bind(format!("0.0.0.0:{port}"))
+                .await
+                .map_err(|_| e),
+            ok => ok,
+        },
+        None => TcpListener::bind(addr).await,
     };
-    TcpListener::bind(&a)
-        .await
-        .map_err(|e| format!("listen tcp {addr}: {}", nisshi_core::store::errno_text(&e)))
+    bound.map_err(|e| format!("listen tcp {addr}: {}", nisshi_core::store::errno_text(&e)))
 }
 
 /// Serves until SIGTERM or SIGINT; notifies systemd once the listeners are bound.
@@ -800,55 +908,20 @@ pub fn run(cfg: Config) -> Result<(), String> {
         for addr in &cfg.listen {
             listeners.push(bind(addr).await?);
         }
+        // A permanent accept error ends the process, as Go's `ServeTLS` returning does.
+        let mut accepting = tokio::task::JoinSet::new();
         if !cfg.listen_metrics.is_empty() {
             let listener = bind(&cfg.listen_metrics).await?;
             let app = app.clone();
-            tokio::spawn(async move {
-                loop {
-                    let Ok((tcp, _)) = listener.accept().await else {
-                        continue;
-                    };
-                    let app = app.clone();
-                    tokio::spawn(async move {
-                        let _ = builder(app.deadlines)
-                            .serve_connection(
-                                TokioIo::new(tcp),
-                                service_fn(move |req| metrics_handle(app.clone(), req)),
-                            )
-                            .await;
-                    });
-                }
-            });
+            accepting.spawn(accept_loop(listener, move |tcp, _| {
+                tokio::spawn(serve_metrics(tcp, app.clone()));
+            }));
         }
         for listener in listeners {
             let (tls, app) = (tls.clone(), app.clone());
-            tokio::spawn(async move {
-                loop {
-                    let Ok((tcp, peer)) = listener.accept().await else {
-                        continue;
-                    };
-                    let (tls, app) = (tls.clone(), app.clone());
-                    tokio::spawn(async move {
-                        let err = match tokio::time::timeout(app.deadlines.header, tls.accept(tcp))
-                            .await
-                        {
-                            Ok(Ok(stream)) => return serve_connection(stream, app).await,
-                            Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                                "EOF".to_string()
-                            }
-                            Ok(Err(e)) => e.to_string(),
-                            Err(_) => "i/o timeout".to_string(),
-                        };
-                        log::warn(
-                            "http-error",
-                            &[(
-                                "err",
-                                Val::Str(&format!("http: TLS handshake error from {peer}: {err}")),
-                            )],
-                        );
-                    });
-                }
-            });
+            accepting.spawn(accept_loop(listener, move |tcp, peer| {
+                tokio::spawn(serve_tls(tls.clone(), tcp, peer, app.clone()));
+            }));
         }
         log::info(
             "start",
@@ -867,7 +940,11 @@ pub fn run(cfg: Config) -> Result<(), String> {
         let sched = app.clone();
         tokio::spawn(async move {
             loop {
-                let now = (sched.store.lock().unwrap().now)();
+                // Off the async workers: the store lock may wait for a commit's fsync or a seal.
+                let s = sched.clone();
+                let now = tokio::task::spawn_blocking(move || (s.store.lock().unwrap().now)())
+                    .await
+                    .unwrap_or_else(|_| nisshi_core::time::real_now_ns());
                 tokio::time::sleep(Duration::from_nanos(until_seal(now))).await;
                 let app = sched.clone();
                 let _ = tokio::task::spawn_blocking(move || seal_and_retain(&app)).await;
@@ -878,12 +955,13 @@ pub fn run(cfg: Config) -> Result<(), String> {
         tokio::select! {
             _ = term.recv() => {}
             _ = tokio::signal::ctrl_c() => {}
+            Some(Ok(e)) = accepting.join_next() => return Err(e),
         }
         Ok::<(), String>(())
     });
     let _ = notify("STOPPING=1");
     rt.shutdown_background();
-    // Errors come from binding, before the start: no stop event then, as the Go server.
+    // An error (binding, or a permanent accept error) is the `exit` event, not a stop.
     result?;
     log::info("stop", &[]);
     Ok(())

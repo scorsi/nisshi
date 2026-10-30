@@ -166,6 +166,7 @@ async fn get(addr: SocketAddr, path: &str, auth: &str) -> (u16, String, Vec<u8>)
 
 #[tokio::test]
 async fn response_table() {
+    log::capture();
     let app = new_app(DEADLINES);
     let addr = start(app.clone()).await;
     let gap0 = record("node-a", 1, "").to_vec();
@@ -586,14 +587,20 @@ async fn response_table() {
     assert_eq!(get(addr, "/nope", "").await.0, 404);
     assert_eq!(get(addr, "/v1/push", "").await.0, 405);
 
-    // Metrics: the names of ADR 0010.
-    let m = app.metrics.render(
-        &[("node-a".to_string(), 1)].into_iter().collect(),
-        1,
-        0,
-        VERSION,
+    // Metrics: the names of ADR 0010, from the handler.
+    let (code, head, m) = get(start_metrics(app.clone()).await, "/metrics", "").await;
+    let m = String::from_utf8(m).unwrap();
+    assert_eq!(code, 200);
+    assert!(
+        head.to_lowercase()
+            .contains("content-type: text/plain; version=0.0.4; charset=utf-8"),
+        "{head}"
     );
+    assert!(m.ends_with('\n'), "exposition format");
+    let build = format!(r#"nisshi_build_info{{version="{VERSION}"}} 1"#);
     for want in [
+        "nisshi_disk_free_bytes ",
+        &build,
         r#"nisshi_records_total{source_node="node-a"} 21"#,
         "nisshi_duplicate_records_total 15",
         "nisshi_seq_gaps_total 1",
@@ -605,6 +612,30 @@ async fn response_table() {
     ] {
         assert!(m.contains(want), "metrics missing {want} in\n{m}");
     }
+
+    // Own logs validate against the schema: every line this process emitted.
+    log::info("test", &[]);
+    log::error("test-error", &[("err", Val::Str("boom"))]);
+    let lines = log::captured();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""event":"stream-owner""#)),
+        "{lines:?}"
+    );
+    for (i, l) in lines.iter().enumerate() {
+        let reason = nisshi_core::logschema::line(l.as_bytes());
+        assert_eq!(reason, "", "log line {}: {l}", i + 1);
+    }
+}
+
+async fn start_metrics(app: Arc<App>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(accept_loop(listener, move |tcp, _| {
+        tokio::spawn(serve_metrics(tcp, app.clone()));
+    }));
+    addr
 }
 
 #[test]
@@ -641,6 +672,7 @@ fn notify_socket() {
 /// A push the store's clock puts on a sealed day: 503, the agent keeps its spool.
 #[tokio::test]
 async fn sealed_day_503() {
+    log::capture();
     let app = new_app(DEADLINES);
     let dir = app.store.lock().unwrap().root.join("node-a");
     std::fs::create_dir_all(&dir).unwrap();
@@ -656,6 +688,12 @@ async fn sealed_day_503() {
     )
     .await;
     assert_eq!(code, 503);
+    let lines = log::captured();
+    assert!(
+        lines.iter().any(|l| l.contains(r#""level":"error""#)
+            && l.contains("receive day already sealed: 2026-10-19")),
+        "no error event: {lines:?}"
+    );
 }
 
 fn tag(num: u32, wt: u8) -> Vec<u8> {
@@ -1040,4 +1078,183 @@ async fn http2_preface_is_refused() {
         );
         assert!(!out.starts_with("HTTP/1.1 2"), "{out}");
     }
+}
+
+#[derive(Debug)]
+struct NoCert;
+
+impl rustls::server::ResolvesServerCert for NoCert {
+    fn resolve(
+        &self,
+        _: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        None
+    }
+}
+
+/// A TLS handshake error (a port probe that closes at once) is a schema line, the Go
+/// server's `http-error` event (TestErrorLogIsSchema).
+#[tokio::test]
+async fn tls_error_log_is_schema() {
+    log::capture();
+    let cfg =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(NoCert));
+    let tls = TlsAcceptor::from(Arc::new(cfg));
+    let app = new_app(DEADLINES);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(accept_loop(listener, move |tcp, peer| {
+        tokio::spawn(serve_tls(tls.clone(), tcp, peer, app.clone()));
+    }));
+    let probe = TcpStream::connect(addr).await.unwrap();
+    let want = format!(
+        "http: TLS handshake error from {}: ",
+        probe.local_addr().unwrap()
+    );
+    drop(probe);
+    let t = std::time::Instant::now();
+    let line = loop {
+        if let Some(l) = log::captured().into_iter().find(|l| l.contains(&want)) {
+            break l;
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "no log line");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(nisshi_core::logschema::line(line.as_bytes()), "", "{line}");
+    assert!(
+        line.contains(r#""event":"http-error","err":"http: TLS handshake error"#),
+        "{line}"
+    );
+}
+
+/// The write deadline covers writing the response: a reader that asks for a large status and
+/// stops reading loses its connection, the response is cut (validation P2).
+#[tokio::test]
+async fn write_deadline_bounds_the_response() {
+    let app = new_app(Deadlines {
+        write: Duration::from_secs(2),
+        ..DEADLINES
+    });
+    {
+        let mut s = app.store.lock().unwrap();
+        for i in 0..100_000u64 {
+            let st = nisshi_core::store::Stream {
+                node: "node-a".into(),
+                hwm: i,
+                ..Default::default()
+            };
+            s.st.streams.insert(format!("{i:032x}"), st);
+        }
+    }
+    let addr = start(app).await;
+    // Read at once, the same response is whole.
+    let (code, _, b) = get(addr, "/v1/status", "Bearer tok-r").await;
+    assert_eq!(code, 200);
+    let full = b.len();
+    assert!(full > 8 << 20, "{full} bytes: not past the socket buffers");
+    let got = tokio::task::spawn_blocking(move || {
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        c.write_all(
+            b"GET /v1/status HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer tok-r\r\nConnection: close\r\n\r\n",
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_secs(4));
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut out = Vec::new();
+        let _ = c.read_to_end(&mut out);
+        out.len()
+    })
+    .await
+    .unwrap();
+    assert!(got < full, "{got} bytes of {full}: response not cut");
+}
+
+/// A zstd frame declaring more than 64 MiB is 413 from its header, as Go's decoder answers,
+/// a single-segment one too (its window is its size); a later frame declaring more than the
+/// budget left as well (validation P2).
+#[tokio::test]
+async fn declared_oversize_zstd_is_413() {
+    let frame = |fhd: u8, size: &[u8]| {
+        let mut f = vec![0x28, 0xb5, 0x2f, 0xfd, fhd];
+        f.extend_from_slice(size);
+        f.extend([1, 0, 0]); // the last block: raw, empty
+        f
+    };
+    let single = frame(0xe0, &((MAX_DECOMPRESSED + 1) as u64).to_le_bytes());
+    assert_eq!(decompress(&single), Err(None));
+    let mut two = zstd::bulk::compress(&vec![0; MAX_DECOMPRESSED - 10], 1).unwrap();
+    let first = two.len();
+    two.extend(frame(0x20, &[11]));
+    assert_eq!(decompress(&two), Err(None), "past the budget left");
+    two.truncate(first);
+    two.extend(frame(0x20, &[10]));
+    assert_eq!(
+        decompress(&two),
+        Err(Some(())),
+        "within it, but no 10 bytes"
+    );
+    let ok = zstd::encode_all(&b"abc"[..], 3).unwrap();
+    assert_eq!(
+        decompress(&[ok.clone(), ok].concat()),
+        Ok(b"abcabc".to_vec())
+    );
+    assert_eq!(decompress(b""), Ok(Vec::new()));
+
+    let addr = start(new_app(DEADLINES)).await;
+    let (code, _, _) = push(
+        addr,
+        Push {
+            raw: Some(single),
+            encoding: "raw-zstd",
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(code, 413);
+}
+
+/// Sequence numbers up to u64::MAX over the API: the hwm stays at the top (validation P1).
+#[tokio::test]
+async fn hwm_at_u64_max() {
+    let addr = start(new_app(DEADLINES)).await;
+    let top = |first: u64, n: u64| (0..n).map(|i| record("node-a", first + i, "")).collect();
+    for (first, records) in [(u64::MAX - 1, top(u64::MAX - 1, 2)), (1, top(1, 2))] {
+        let (code, ok, _) = push(
+            addr,
+            Push {
+                first,
+                records,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!((code, ok.unwrap().acked_seq), (200, u64::MAX), "{first}");
+    }
+}
+
+#[test]
+fn unhex_never_panics() {
+    assert_eq!(unhex("aé"), vec![0]);
+    assert_eq!(unhex("é0ab"), vec![0, 0x0a]);
+    assert_eq!(unhex("ff00"), vec![0xff, 0]);
+}
+
+/// Accept errors: EMFILE and the like are retried, anything else ends the server.
+#[tokio::test]
+async fn accept_errors_and_bind() {
+    for (e, retry) in [
+        (std::io::Error::from_raw_os_error(24), true), // EMFILE
+        (std::io::Error::from_raw_os_error(23), true), // ENFILE
+        (std::io::ErrorKind::ConnectionAborted.into(), true),
+        (std::io::Error::from_raw_os_error(9), false), // EBADF
+        (std::io::ErrorKind::InvalidInput.into(), false),
+    ] {
+        assert_eq!(accept_retryable(&e), retry, "{e}");
+    }
+    let l = bind(":0").await.unwrap();
+    assert_ne!(l.local_addr().unwrap().port(), 0);
 }

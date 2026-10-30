@@ -14,7 +14,21 @@ const USAGE: &str = "usage:
   nisshi-store --version";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Not `env::args`, which panics on an argument that is not UTF-8.
+    let args: Vec<String> = match std::env::args_os()
+        .skip(1)
+        .map(|a| a.into_string())
+        .collect()
+    {
+        Ok(a) => a,
+        Err(a) => {
+            eprintln!(
+                "nisshi-store: argument not UTF-8: {}\n{USAGE}",
+                a.to_string_lossy()
+            );
+            return ExitCode::from(2);
+        }
+    };
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["--version"] => {
             println!("nisshi-store {}", server::VERSION);
