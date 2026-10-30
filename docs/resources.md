@@ -24,8 +24,8 @@ Plus the open day (≈ 8 MB), manifests (negligible), and the free-space reserve
 
 ## Memory and CPU
 
-`nisshi-store` ≤ 64 MiB RSS (`MemoryMax=128M`). CPU idle except the
-nightly seal (seconds).
+Target: `nisshi-store` ≤ 64 MiB RSS at rest, bounded by `MemoryMax=128M`; not yet measured on
+the Rust server. CPU idle except the nightly seal (seconds).
 
 The figures below were measured on the Go implementation (before ADR 0015), where `GOMEMLIMIT`
 was a GC target, not a ceiling; the Rust server is to be measured again. In both, a push needs its decompressed body in memory. One
@@ -42,5 +42,7 @@ fixes):
 | 400 000 small records (63 MiB decompressed) | 356 MiB | 117 MiB |
 | 8 Mi empty records (16 MiB decompressed, invalid) | 744 MiB | 77 MiB |
 
-The 64 MiB batch fits `MemoryMax=128M` with about 10 % margin; hikyaku's batches (4 MiB) are
-far below. A measurement under systemd on the deployed node is still due (M1).
+On the Go implementation the 64 MiB batch fitted `MemoryMax=128M` with about 10 % margin;
+hikyaku's batches (4 MiB) are far below. Whether the Rust server fits is not established: it is
+to be measured, under systemd, on the deployed node (M1). The seal does not take the push slot,
+so a seal and a push can hold their memory at the same time.

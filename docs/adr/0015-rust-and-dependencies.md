@@ -22,9 +22,39 @@ way of writing the same mechanisms.
 
 ## Decision
 
-Rust, built with crane, as a Cargo workspace (binaries: ADR 0016). The rewrite is like for
-like: the ingestion API, HTTP behaviour, storage format, `state.json`, CLI and the module's
-options do not change.
+Rust, built with crane, as a Cargo workspace (binaries: ADR 0016). The rewrite keeps the
+ingestion API and its response table, the storage format, `state.json` and manifests byte for
+byte, the CLI's arguments, output and exit codes, and the module's options and defaults. It is
+not a copy of the Go server's HTTP stack or of its diagnostics; the intended differences from
+the Go implementation are:
+
+- **HTTP** (ADR 0003): HTTP/1.1 only; a declared `Content-Length` over 8 MiB is 413 from the
+  headers; an idle keep-alive connection is closed after 10 s (the header deadline), not 120 s;
+  the read and write deadlines run from the end of the request headers, and the write deadline
+  covers writing the response; paths are compared as sent; `OPTIONS *` is 404; at most 100
+  request headers; a response sent before the body is read closes the connection unless the body has
+  already arrived; an unknown
+  protobuf group nested more than 100 deep is 400 (Go: 10 000).
+- **Listening and accepting**: `:port` listens on `[::]`, on `0.0.0.0` when the host has no
+  IPv6. A transient accept error (ENFILE, EMFILE, a connection reset or aborted, an interrupted
+  call) is logged as `http-error` and retried after 5 ms, doubling up to 1 s; any other ends
+  the server with its `exit` event and a non-zero status.
+- **Defects of the Go implementation, fixed**: at restore, every record of a day, sealed or
+  open, must carry its node directory's `node`, as the manifest does (Go checked the manifest
+  only, so a day relabelled under another node was accepted); at start, a seal interrupted
+  after its manifest is checked against it (hash, count, ranges, `node`) instead of trusted;
+  the truncations of a rollback and of recovery are fsynced; a stopped writer (ADR 0003
+  amendment) neither seals nor deletes until a restart; a `nisshi read` duration whose terms
+  add up past the range is invalid (Go wrapped it to 0). `seq` arithmetic is overflow-checked
+  up to u64::MAX, with the same answers as before.
+- **Metadata JSON**: `state.json` and manifests are read with `serde_json`, which is stricter
+  than Go's `encoding/json` on files the store never writes: member names match exactly, a
+  repeated member or a lone surrogate escape is an error.
+- **Diagnostics**: error texts of the CLI and the server (JSON, zstd, TLS) are worded by the
+  Rust crates; exit codes do not change. Outside Nix the version is `0.1.0-dev` (Go: `dev`). A
+  panic is Rust's message on stderr, not a schema line; no input reaches one.
+- **Compressed bytes**: frames are written by libzstd, not klauspost (Consequences).
+- **Module**: it also runs `nisshi-store check-config` on the rendered file at build (ADR 0016).
 
 Direct dependencies, the same crates as masu:
 
@@ -64,6 +94,6 @@ direct one, listed here.
   bytes of the frames differ (another encoder); the format never fixed them.
 - The unit keeps `GOMEMLIMIT=64MiB` in its environment, without effect, so that the deployed
   unit and its acceptance tests do not change; `MemoryMax=128M` is the bound. The memory
-  figures of [resources](../resources.md) were measured on the Go implementation and are to be
-  measured again.
+  figures of [resources](../resources.md) were measured on the Go implementation; the Rust
+  server's are to be measured, and until then its fit under `MemoryMax` is not established.
 - One test pusher language for both stores (Rust); masu and nisshi still share no code.

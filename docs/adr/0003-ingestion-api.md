@@ -79,9 +79,17 @@ compressed, 64 MiB decompressed) are unchanged.
   (64 MiB / 128 bytes) keeps only the first ones, among which is the first invalid record that
   the indexed 400 reports. Measurements: [resources](../resources.md).
 - **Deadlines**: 10 s for the TLS handshake and for the request headers, which also bounds an
-  idle connection waiting for its next request; 60 s to read a request (headers and body), 120 s
-  to write its response, 64 KiB of headers. A body not received in time is answered like a
-  body too large (413): the agent splits the batch, which also gets a slow link through.
+  idle connection waiting for its next request; from the end of a request's headers, 60 s to
+  read its body and 120 s to the end of its response, writing included: past the write deadline
+  the connection is dropped, a commit already under way still completes. At most 64 KiB and
+  100 request headers (431 past). A body not received in time is answered like a body too
+  large (413): the agent splits the batch, which also gets a slow link through.
+- **Request handling**: paths are compared as sent, without cleaning or unescaping (`/v1/push`
+  only; `//v1/push` or `/v1/%70ush` is 404, `OPTIONS *` too). A response sent before the body
+  is read (401, 403, 413 from `Content-Length`, 503) does not wait to drain it: unless the body
+  has already arrived, the connection is closed. A zstd frame whose header declares more than the 64 MiB left (a single-segment
+  frame's window is its size) is 413 before it is decoded. Unknown protobuf fields are
+  skipped, an unknown group nested more than 100 deep is 400 `body-protobuf`.
 - An agent's `status` is kept with `version` cut to at most 256 bytes on a UTF-8 boundary and
   unknown fields dropped; only the kept bytes are copied out of the body.
 - **A write error once the commit may be published is not rolled back** (validation R8). When
