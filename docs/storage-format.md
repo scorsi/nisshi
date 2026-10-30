@@ -68,6 +68,9 @@ Enough to read, verify or re-ingest a nisshi store without nisshi's code. ADRs 0
 At start, each open day file is truncated to its committed length; a day file absent from
 `state.json` and without a manifest is truncated to zero. A committed length whose file is
 missing or shorter is acknowledged data lost: the writer refuses to start and changes nothing.
+A day file still in `state.json` but with a manifest is a seal interrupted after its manifest:
+it must match the manifest (content hash, record count, stream ranges, every record's `node`
+the manifest's), or the writer refuses to start; it is never resized.
 One writer per root: it holds an exclusive `flock` on the root directory.
 
 ## Restore (writer)
@@ -95,6 +98,8 @@ pushes, and logs one `restore` event:
 
 - each sealed day is checked against its manifest (content hash, record count, stream ranges)
   when its data file exists; a mismatch stops the start;
+- every record of a day, sealed or open, carries the `node` of its node directory, which is
+  also its manifest's `node`; a record of another node stops the start;
 - each open day (no manifest) must end exactly on a complete zstd frame, and stays open. A
   corrupt frame (bad magic, reserved block type, block over 128 KiB) or an incomplete tail (a
   header or block running past the end) stops the start with the file, the offset and the
