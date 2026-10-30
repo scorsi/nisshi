@@ -1,0 +1,15 @@
+[package]
+name = "nisshi-core"
+version.workspace = true
+edition.workspace = true
+description = "nisshi's storage format, log schema, hash chain, commit, seal and restore"
+
+[dependencies]
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zstd.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true

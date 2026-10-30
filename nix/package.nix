@@ -1,41 +1,54 @@
-{ lib, buildGoModule }:
-buildGoModule (finalAttrs: {
-  pname = "nisshi";
-  version = "0.1.0-dev";
-
-  # cmd/nisshi-testpush is test-only (ADR 0011): nix/vm-tests.nix builds it with subPackages.
-  subPackages = [ "cmd/nisshi" ];
-
-  # Only what the Go build and its tests read.
-  src = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.unions [
-      ../go.mod
-      ../go.sum
-      (lib.fileset.fileFilter (f: f.hasExt "go") ../.)
-      ../fixtures/logs
-      ../docs/log-schema.md
-    ];
+# The nisshi workspace built by crane (ADR 0015): the data CLI `nisshi` and the datastore
+# `nisshi-server` (ADR 0016) in one package. build.rs compiles proto/ with prost-build, which
+# needs protoc. `passthru.testpush` is the test pusher of ADR 0011, for the nixosTests only.
+{
+  lib,
+  protobuf,
+  craneLib,
+}:
+let
+  common = {
+    pname = "nisshi";
+    version = (lib.importTOML ../Cargo.toml).workspace.package.version;
+    strictDeps = true;
+    nativeBuildInputs = [ protobuf ];
+    PROTOC = "${protobuf}/bin/protoc";
+    src = lib.fileset.toSource {
+      root = ../.;
+      fileset = lib.fileset.unions [
+        (craneLib.fileset.commonCargoSources ../.)
+        ../proto
+        # Tests read the fixtures and the schema's examples.
+        ../fixtures
+        ../docs/log-schema.md
+      ];
+    };
   };
-
-  # Changes whenever go.sum does: set to lib.fakeHash and read the new value from the build error.
-  vendorHash = "sha256-bKtIfjtfZ8OnzM7uaOPMZe4r0sj3ma0sucvGNlLEqzc=";
-
-  env.CGO_ENABLED = 0;
-  ldflags = [
-    "-s"
-    "-w"
-    "-X nisshi/internal/serve.Version=${finalAttrs.version}"
-  ];
-
-  # `nix flake check` runs this phase: vet first, then the default `go test ./...`.
-  preCheck = ''
-    go vet ./...
-  '';
-
-  meta = {
-    description = "Log store of the observability stack";
-    homepage = "https://github.com/scorsi/nisshi";
-    mainProgram = "nisshi";
-  };
-})
+  cargoArtifacts = craneLib.buildDepsOnly common;
+in
+craneLib.buildPackage (
+  common
+  // {
+    inherit cargoArtifacts;
+    cargoExtraArgs = "--locked -p nisshi -p nisshi-server";
+    doCheck = false; # the tests run in checks.cargo-test
+    meta = {
+      description = "Log store of the observability stack";
+      homepage = "https://github.com/scorsi/nisshi";
+      mainProgram = "nisshi";
+    };
+    passthru = {
+      inherit common cargoArtifacts;
+      testpush = craneLib.buildPackage (
+        common
+        // {
+          inherit cargoArtifacts;
+          pname = "nisshi-testpush";
+          cargoExtraArgs = "--locked -p nisshi-testpush";
+          doCheck = false;
+          meta.mainProgram = "nisshi-testpush";
+        }
+      );
+    };
+  }
+)

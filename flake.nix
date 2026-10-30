@@ -13,6 +13,8 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -41,7 +43,8 @@
       perSystem =
         { pkgs, lib, ... }:
         let
-          nisshi = pkgs.callPackage ./nix/package.nix { };
+          craneLib = inputs.crane.mkLib pkgs;
+          nisshi = pkgs.callPackage ./nix/package.nix { inherit craneLib; };
         in
         {
           packages = {
@@ -55,22 +58,36 @@
               pkgs
               lib
               nisshi
+              craneLib
               ;
           };
 
           devShells.default = pkgs.mkShellNoCC {
-            packages = [
-              pkgs.go
-              pkgs.gopls
-              pkgs.buf
-              pkgs.protoc-gen-go
-              pkgs.jq
+            packages = with pkgs; [
+              cargo
+              rustc
+              rust-analyzer
+              clippy
+              rustfmt
+              buf
+              protobuf
+              jq
+              zstd
             ];
+            PROTOC = "${pkgs.protobuf}/bin/protoc";
           };
 
-          treefmt.programs = {
-            nixfmt.enable = true;
-            gofmt.enable = true;
+          treefmt = {
+            projectRootFile = "flake.nix";
+            programs = {
+              nixfmt.enable = true;
+              rustfmt.enable = true;
+            };
+            settings.excludes = [
+              "target/**"
+              "Cargo.lock"
+              "fixtures/**"
+            ];
           };
         };
     };

@@ -1,0 +1,19 @@
+[package]
+name = "nisshi-testpush"
+version.workspace = true
+edition.workspace = true
+description = "Test pusher of the nixosTests (ADR 0011): not shipped"
+publish = false
+
+[dependencies]
+nisshi-core.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+prost.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+zstd.workspace = true

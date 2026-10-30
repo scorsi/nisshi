@@ -1,0 +1,8 @@
+[package]
+name = "nisshi"
+version.workspace = true
+edition.workspace = true
+description = "nisshi data CLI: validate, verify, read"
+
+[dependencies]
+nisshi-core.workspace = true
