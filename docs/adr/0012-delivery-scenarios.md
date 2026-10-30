@@ -29,7 +29,8 @@ agree, since hikyaku's client logic assumes one behaviour.
 - They are signal-agnostic: they speak of record counts, sequence numbers, tokens and expected
   responses; each pusher generates valid records of its own signal and, where a scenario asks
   for it, an invalid one.
-- nisshi's test pusher (Go) and masu's (Rust) each run every scenario of their own copy.
+- nisshi's test pusher and masu's (both Rust since nisshi ADR 0015, no code shared) each run
+  every scenario of their own copy.
 - The mirror rule is written in both repositories' `CLAUDE.md`: a change to `fixtures/delivery/`
   or to `delivery-scenarios.md` is made in both repositories, with the implementation change it
   implies, before either is committed.

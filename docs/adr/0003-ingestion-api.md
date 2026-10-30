@@ -20,8 +20,16 @@ silently, nothing may appear twice. The house contracts are protobuf.
 ## Decision
 
 `POST /v1/push`, body = `PushRequest` ([ingest.proto](../../proto/nisshi/v1/ingest.proto)),
-`Content-Type: application/x-protobuf`, `Content-Encoding: zstd`, HTTPS (HTTP/2 when
-negotiated). At most 8 MiB compressed, 64 MiB decompressed.
+`Content-Type: application/x-protobuf`, `Content-Encoding: zstd`, HTTPS, HTTP/1.1 only. At
+most 8 MiB compressed, 64 MiB decompressed: a declared `Content-Length` over 8 MiB is 413 from
+the headers, before anything is read; a body without length, or longer than declared, is cut at
+the limit while reading and is 413 too.
+
+**HTTP/1.1 only.** The server bounds the time of HTTP/1 request headers, but has no such bound
+for an HTTP/2 preface or HEADERS frame, so an HTTP/2 connection could stay open without ever
+completing a request. ALPN offers `http/1.1` only; an HTTP/2 preface is answered as a malformed
+HTTP/1 request and the connection closed. hikyaku speaks HTTP/1.1, as with masu (masu ADR 0003).
+HTTP/2 comes back with a bound on its preface and headers.
 
 **Streams.** A stream is identified by `stream_id`; each record has a `seq`, consecutive
 within the stream. nisshi keeps per stream the highest committed `seq` (`hwm`), committed
@@ -64,14 +72,15 @@ compressed, 64 MiB decompressed) are unchanged.
 - **One push at a time** is processed, from reading the body to the commit; later pushes wait
   in their connection, at most 25 s (under hikyaku's 30 s request timeout), then get **503**
   with nothing read or stored, and `Connection: close` so that the 503 never waits for an
-  unread body (net/http would otherwise drain it first, up to the 60 s read deadline;
+  unread body (an HTTP server would otherwise drain it first, up to the 60 s read deadline;
   validation N1): the agent backs off and retries (validation R4; a long seal or
   a stuck `fsync` holds the slot, and the server's deadlines do not end a waiting handler). Records are not copied out of the decompressed body and
   are streamed into the frame; a body with more records than valid records could fill
   (64 MiB / 128 bytes) keeps only the first ones, among which is the first invalid record that
   the indexed 400 reports. Measurements: [resources](../resources.md).
-- **Deadlines**: 60 s to read a request (headers and body), 120 s to write its response, 120 s
-  for an idle connection, 64 KiB of headers. A body not received in time is answered like a
+- **Deadlines**: 10 s for the TLS handshake and for the request headers, which also bounds an
+  idle connection waiting for its next request; 60 s to read a request (headers and body), 120 s
+  to write its response, 64 KiB of headers. A body not received in time is answered like a
   body too large (413): the agent splits the batch, which also gets a slow link through.
 - An agent's `status` is kept with `version` cut to at most 256 bytes on a UTF-8 boundary and
   unknown fields dropped; only the kept bytes are copied out of the body.

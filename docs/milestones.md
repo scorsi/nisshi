@@ -5,9 +5,8 @@ and the services) is in the deployment repository.
 
 ## M0 — Schema and validator
 
-- Repository on Forgejo with GitHub mirror; flake (flake-parts, treefmt, `buildGoModule`,
-  `CGO_ENABLED=0`); `go.mod` limited to ADR 0002; `proto/` with `buf generate`, generated Go
-  committed and checked.
+- Repository on Forgejo with GitHub mirror; flake (flake-parts, treefmt); dependencies
+  limited to ADR 0002 (Go at the time; Rust and ADR 0015 since); `proto/` checked.
 - `schema/log-v1.json`; `nisshi validate --logs` reading lines on stdin (raw service output or
   `journalctl -o cat`), failing with the line number of the first invalid line.
 - Fixtures (ADR 0004, 0012): `fixtures/logs/service-lines.ndjson` and `records.ndjson` with
@@ -23,7 +22,7 @@ and the services) is in the deployment repository.
 
 ## M1 — Store
 
-- `nisshi serve`: config TOML, unknown keys rejected (`listen`, `listen_metrics`, `data_dir`, `tls.cert_file`,
+- `nisshi-store serve` (`nisshi serve` before ADR 0016): config TOML, unknown keys rejected (`listen`, `listen_metrics`, `data_dir`, `tls.cert_file`,
   `tls.key_file`, `tokens` = map hex SHA-256 → identity, `retention_days` (400, `0` = keep),
   `disk_reserve`).
 - `POST /v1/push` with the table of ADR 0003, `GET /v1/status`, own `/metrics` on loopback.
@@ -34,7 +33,7 @@ and the services) is in the deployment repository.
   `dataDir` (default `/var/lib/nisshi`, fixed path for persistence), `tls.{certFile, keyFile}`
   (read through `LoadCredential`), `tokens.<sha256 hex> = "node:<name>" | "reader"`,
   `retentionDays` (400; `null` rendered as `0`), `diskReserve` (2 GiB); static user `nisshi`, `MemoryMax=128M`,
-  `GOMEMLIMIT=64MiB`, `Type=notify`, hardening as genkan; no firewall opening.
+  `GOMEMLIMIT=64MiB` (no effect since ADR 0015, kept), `Type=notify`, hardening as genkan; no firewall opening.
 - **Tests (nixosTest with the test pusher)**:
   - every scenario of `fixtures/delivery/` (duplicates, overlap, gap, two streams, 401,
     request-level 400, indexed 400 with `record_index` and `reason`, `kill -9`, disk full);

@@ -12,7 +12,7 @@ depends on the other, so nothing enforces it but this rule:
 - `docs/delivery-scenarios.md`
 
 A change to one of them is made in **both** repositories, together with the store-side change
-it implies (Go here, Rust in masu), before either is committed. Check with
+it implies (Rust in both), before either is committed. Check with
 `sha256sum fixtures/delivery/* docs/delivery-scenarios.md` in both: same output.
 
 The delivery semantics themselves (ADR 0003: streams, `hwm`, the response table,
@@ -29,7 +29,10 @@ The delivery semantics themselves (ADR 0003: streams, `hwm`, the response table,
 
 ## Conventions
 
-- Dependencies limited to ADR 0002; any other module is an ADR.
+- Dependencies limited to ADR 0015 (the register); any other crate is an ADR.
+- Binaries (ADR 0016): `nisshi-core` (library), `nisshi` (data CLI), `nisshi-store`
+  (datastore). `nisshi-query` is reserved for the future query daemon.
+- Check with `nix develop -c cargo test`, `nix develop -c cargo clippy --all-targets -- -D warnings`.
 - Format with `nix fmt`.
 - Public repository: no host names, domains, addresses or keys of any deployment.
 - Code, comments, docs and commits in English.

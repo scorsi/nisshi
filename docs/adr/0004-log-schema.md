@@ -69,7 +69,8 @@ Harmonisation across services:
 
 ## Amendment — 2026-10-22 (accepted, owner decision: notes, no design change)
 
-Parser corners (nisshi review §3.4): Go's `encoding/json` (nisshi) and `serde_json` (hikyaku)
+Parser corners (nisshi review §3.4): Go's `encoding/json` (nisshi at the time; its Rust rewrite
+reads JSON the same way, ADR 0015) and `serde_json` (hikyaku)
 differed outside the fixtures on JSON nesting depth (10 000 against about 128), on numbers
 out of `f64` range in service fields (`1e10000`), on lone UTF-16 surrogates (`\ud800`), and on
 free service fields named like envelope members in another case (`TS`, `SEQ`). A line in one

@@ -6,7 +6,7 @@ Decision / Consequences. A decision is changed by a new ADR that supersedes the 
 | ADR | Title |
 |---|---|
 | [0001](0001-scope.md) | Scope and boundaries |
-| [0002](0002-language-and-dependencies.md) | Language and dependencies |
+| [0002](0002-language-and-dependencies.md) | Language and dependencies (superseded by 0015) |
 | [0003](0003-ingestion-api.md) | Ingestion API and delivery semantics |
 | [0004](0004-log-schema.md) | Common log schema and its publication |
 | [0005](0005-storage.md) | Storage: NDJSON segments by receive day |
@@ -19,3 +19,5 @@ Decision / Consequences. A decision is changed by a new ADR that supersedes the 
 | [0012](0012-delivery-scenarios.md) | Delivery scenarios as shared data |
 | [0013](0013-forbidden-for-wrong-role.md) | 403 for a valid token of the wrong role |
 | [0014](0014-stream-owner.md) | A stream belongs to the node that first pushed it |
+| [0015](0015-rust-and-dependencies.md) | Language: Rust, and the dependency register |
+| [0016](0016-binaries.md) | Three binaries: data CLI, server, query daemon |

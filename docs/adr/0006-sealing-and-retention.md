@@ -12,7 +12,7 @@ never a reaction to disk pressure.
 
 - **Seal** every day file of a past UTC day, at 00:10 UTC and at start-up (idempotent): scan
   the content (count, `min_ts`/`max_ts`, services, stream ranges, SHA-256), recompress into a
-  temporary file (`SpeedBetterCompression`, 8 MiB window), decompress it again and compare the
+  temporary file (zstd level 7, 8 MiB window), decompress it again and compare the
   hash, rename over the original, write the manifest (temporary + rename), drop the file from
   `state.json`. A line that is not valid JSON stops the seal of that file
   (`nisshi_seals_total{result="error"}`, `error` log); the file stays as is.

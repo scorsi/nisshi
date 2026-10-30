@@ -24,10 +24,11 @@ Plus the open day (≈ 8 MB), manifests (negligible), and the free-space reserve
 
 ## Memory and CPU
 
-`nisshi serve` ≤ 64 MiB RSS (`GOMEMLIMIT=64MiB`, `MemoryMax=128M`). CPU idle except the
+`nisshi-store` ≤ 64 MiB RSS (`MemoryMax=128M`). CPU idle except the
 nightly seal (seconds).
 
-`GOMEMLIMIT` is a GC target, not a ceiling: a push needs its decompressed body in memory. One
+The figures below were measured on the Go implementation (before ADR 0015), where `GOMEMLIMIT`
+was a GC target, not a ceiling; the Rust server is to be measured again. In both, a push needs its decompressed body in memory. One
 push at a time is processed from body read to commit (others wait, unread, in their
 connection); records alias the decompressed body and are streamed into the frame, and at most 256 bytes
 of an agent status' `version` are copied out of it, so the worst case is about one

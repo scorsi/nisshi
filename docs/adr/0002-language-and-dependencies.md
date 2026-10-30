@@ -1,6 +1,6 @@
 # ADR 0002 — Language and dependencies
 
-Status: Accepted — 2026-10-19
+Status: Superseded by [0015](0015-rust-and-dependencies.md) — accepted 2026-10-19
 
 ## Context
 
