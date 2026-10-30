@@ -14,7 +14,7 @@ not computation. It runs on a NixOS VM with memory to spare but not to waste.
 |---|---|---|
 | Go | stdlib HTTPS server with HTTP/2, `crypto/tls`, JSON, SHA-256; official protobuf; pure-Go zstd; genkan and hanko use it | GC, irrelevant here |
 | Rust | memory, speed | a dependency tree (tokio, hyper, rustls, prost, serde_json, zstd, sha2) for an I/O-bound service |
-| Elixir | concurrency, hanshou's language | a BEAM release for an append-only writer; zstd through a NIF |
+| Elixir | concurrency, hansho's language | a BEAM release for an append-only writer; zstd through a NIF |
 | Zig | annai's language | no TLS server, no zstd compressor in std |
 
 ## Decision

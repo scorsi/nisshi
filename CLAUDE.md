@@ -24,7 +24,7 @@ The delivery semantics themselves (ADR 0003: streams, `hwm`, the response table,
   definition. A rule change is a fixture change first. hikyaku runs these fixtures too: a
   change here is a change to hikyaku's validator (`~/repositories/hikyaku`).
 - `proto/nisshi/v1/` is the ingestion API; hikyaku compiles it.
-- `docs/storage-format.md` is a public contract (kenbun, yagura, hanshou read it): a change is
+- `docs/storage-format.md` is a public contract (kenbun, yagura, hansho read it): a change is
   a new format version, never an in-place change.
 
 ## Conventions

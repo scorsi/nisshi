@@ -5,7 +5,7 @@ Status: Accepted — 2026-10-19
 ## Context
 
 Nothing is stored today and annai and genkan do not log each request yet. A security-oriented
-analysis layer ([kenbun](../../../kenbun)) and alerting ([hanshou](../../../hanshou)) will come
+analysis layer ([kenbun](../../../kenbun)) and alerting ([hansho](../../../hansho)) will come
 later and must re-read the whole history. Metrics live in [masu](../../../masu), a separate
 store with its own format: no code is shared between the two.
 
@@ -32,7 +32,7 @@ what a checker needs).
 
 ## Consequences
 
-- The storage format is a contract: kenbun, yagura or hanshou read it with or without nisshi's
+- The storage format is a contract: kenbun, yagura or hansho read it with or without nisshi's
   code. Changing it means a new format version, never an in-place change.
 - hikyaku depends on nisshi (protos, end-to-end tests); nisshi tests itself with a test
   pusher and depends on nothing in the stack.

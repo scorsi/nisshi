@@ -52,7 +52,7 @@ restore, `lastReceiveNs` is 0 until the stream's next push.
 |---|---|---|
 | fed by | hikyaku | `nisshi.v1` ingestion API |
 | schema used by | every house service | log lines on stderr, `nisshi validate` in their tests |
-| read by | kenbun, yagura, hanshou (later) | the storage format, or a read API added then |
+| read by | kenbun, yagura, hansho (later) | the storage format, or a read API added then |
 
 ## Conventions
 
