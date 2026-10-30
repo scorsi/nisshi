@@ -43,8 +43,31 @@ pub fn line(ns: i64, level: &str, event: &str, fields: &[(&str, Val)]) -> String
     out
 }
 
+/// Copies of the lines emitted while a test captures them.
+static CAPTURED: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+/// Tests: from now on, also keep a copy of every line emitted by this process.
+pub fn capture() {
+    CAPTURED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Vec::new);
+}
+
+/// Tests: the lines emitted since `capture`.
+pub fn captured() -> Vec<String> {
+    CAPTURED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
+}
+
 fn emit(level: &str, event: &str, fields: &[(&str, Val)]) {
     let l = line(crate::time::real_now_ns(), level, event, fields);
+    if let Some(c) = CAPTURED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        c.push(l.clone());
+    }
     let mut err = std::io::stderr().lock();
     let _ = writeln!(err, "{l}");
 }

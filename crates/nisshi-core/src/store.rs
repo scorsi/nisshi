@@ -306,7 +306,22 @@ impl Store {
         let by_key: BTreeMap<String, &DataFile> = files.iter().map(|f| (f.key(), f)).collect();
         for (key, &n) in &self.st.days {
             let f = by_key.get(key);
-            if f.is_some_and(|f| f.sealed) {
+            if let Some(f) = f.filter(|f| f.sealed) {
+                // A seal interrupted after its manifest: the file, original or recompressed,
+                // must hold exactly what the manifest records (masu); it is never resized.
+                let mp = manifest_path(&self.root, &f.node, &f.day);
+                let b = fs::read(&mp).map_err(|e| ioerr("open", &mp, &e))?;
+                let m = crate::seal::Manifest::parse(&b, &mp)?;
+                if (m.node.as_str(), m.day.as_str()) != (f.node.as_str(), f.day.as_str()) {
+                    return Err(format!(
+                        "{}: manifest of {}/{}",
+                        mp.display(),
+                        m.node,
+                        m.day
+                    ));
+                }
+                crate::restore::check_sealed(&m, &f.path)
+                    .map_err(|e| format!("{key}: interrupted seal: {e}"))?;
                 continue;
             }
             let (node, day) = key.split_once('/').unwrap_or((key, ""));
@@ -384,12 +399,16 @@ impl Store {
         };
         // seqs are consecutive: the duplicates are a prefix of the batch.
         if st.hwm >= b.first_seq {
-            r.duplicates = (st.hwm - b.first_seq + 1).min(n) as usize;
+            r.duplicates = (st.hwm - b.first_seq).saturating_add(1).min(n) as usize;
         }
         r.stored = b.records.len() - r.duplicates;
         if r.stored == 0 {
             return Ok(r);
         }
+        // n > 0 here; seqs past u64::MAX are no record's (the API refuses them as seq-mismatch).
+        let Some(last_seq) = b.first_seq.checked_add(n - 1) else {
+            return Err(err(Kind::Other, "seq past u64::MAX".into()));
+        };
         let now = (self.now)();
         let ts = crate::time::format_ts(now);
         let recv = format!(",\"recv_ts\":\"{ts}\"}}\n");
@@ -445,7 +464,7 @@ impl Store {
         }
         // Mutate a copy of the stream so a failed state write leaves memory as on disk.
         let mut ns = st.clone();
-        ns.hwm = b.first_seq + n - 1;
+        ns.hwm = last_seq;
         ns.last_receive_ns = now;
         if b.last_ts > ns.last_record_ts {
             ns.last_record_ts = b.last_ts.clone();
@@ -494,7 +513,7 @@ impl Store {
             match OpenOptions::new().write(true).open(path) {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
                 r => r
-                    .and_then(|f| f.set_len(committed as u64))
+                    .and_then(|f| f.set_len(committed as u64).and_then(|()| f.sync_all()))
                     .map_err(|e| ioerr("truncate", path, &e)),
             }
         };
@@ -564,6 +583,11 @@ impl Store {
     pub fn is_broken(&self) -> bool {
         self.broken.is_some()
     }
+
+    /// Why the writer stopped: no push, seal or retention until a restart.
+    pub fn broken(&self) -> Option<&str> {
+        self.broken.as_deref()
+    }
 }
 
 /// `node → hex SHA-256 of its newest manifest`, the chain heads (ADR 0007).
@@ -610,7 +634,7 @@ pub(crate) fn truncate(path: &Path, n: i64) -> Result<(), String> {
         OpenOptions::new()
             .write(true)
             .open(path)
-            .and_then(|f| f.set_len(n as u64))
+            .and_then(|f| f.set_len(n as u64).and_then(|()| f.sync_all()))
     };
     r.map_err(|e| ioerr("truncate", path, &e))
 }

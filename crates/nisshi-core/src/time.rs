@@ -347,10 +347,11 @@ pub fn parse_duration(orig: &str) -> Result<i64, String> {
                 return Err(invalid());
             }
         }
-        d += v;
-        if d > LIMIT {
-            return Err(invalid());
-        }
+        // Go's uint64 sum wraps (2^63 + 2^63 is 0, accepted); here it is an invalid duration.
+        d = d
+            .checked_add(v)
+            .filter(|&d| d <= LIMIT)
+            .ok_or_else(invalid)?;
     }
     if neg {
         return Ok((d as i64).wrapping_neg());
@@ -436,5 +437,11 @@ mod tests {
         );
         assert!(parse_duration("+2562048h").is_err());
         assert!(parse_duration("+2562047h").is_ok());
+        // Each term at the limit: no overflow panic, invalid (Go wrapped the sum to 0).
+        assert_eq!(
+            parse_duration("+9223372036854775808ns9223372036854775808ns").unwrap_err(),
+            r#"time: invalid duration "+9223372036854775808ns9223372036854775808ns""#
+        );
+        assert_eq!(parse_duration("-9223372036854775808ns"), Ok(i64::MIN));
     }
 }

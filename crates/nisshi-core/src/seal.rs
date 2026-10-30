@@ -91,7 +91,7 @@ impl Manifest {
         )
     }
 
-    fn parse(b: &[u8], path: &Path) -> Result<Manifest, String> {
+    pub(crate) fn parse(b: &[u8], path: &Path) -> Result<Manifest, String> {
         #[derive(Deserialize)]
         struct In {
             v: Option<i64>,
@@ -154,6 +154,9 @@ impl Store {
     /// in order. Returns the days sealed and the errors met; a file whose seal fails stays as
     /// it is, and so do the later days of its node: sealing them would link past it.
     pub fn seal_past(&mut self) -> (Vec<String>, Vec<String>) {
+        if let Some(why) = self.broken() {
+            return (Vec::new(), vec![format!("skipped, writer stopped: {why}")]);
+        }
         let today = crate::time::day_of((self.now)());
         let files = match data_files(&self.root) {
             Ok(f) => f,
@@ -292,6 +295,9 @@ impl Store {
     /// their manifests (ADR 0006). Returns the days deleted.
     pub fn retain(&mut self, days: i64) -> (Vec<String>, Option<String>) {
         let mut deleted = Vec::new();
+        if let Some(why) = self.broken() {
+            return (deleted, Some(format!("skipped, writer stopped: {why}")));
+        }
         if days <= 0 {
             return (deleted, None);
         }

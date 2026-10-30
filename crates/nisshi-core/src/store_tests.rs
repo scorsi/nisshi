@@ -75,7 +75,7 @@ fn batch(first: u64, n: u64) -> OwnedBatch {
         node: "node-a".into(),
         stream: STREAM_A.into(),
         first,
-        records: (first..first + n).map(record).collect(),
+        records: (0..n).map(|i| record(first + i)).collect(),
     }
 }
 
@@ -1069,4 +1069,102 @@ fn empty_day_seals() {
         "{m}"
     );
     verify_ok(&root).unwrap();
+}
+
+/// Sequence numbers at the top of the range (validation P1): the first push may end at
+/// u64::MAX, after which every batch is a duplicate and the hwm never goes back; a batch that
+/// would run past u64::MAX stores nothing. No arithmetic overflow, in debug builds too.
+#[test]
+fn hwm_at_u64_max() {
+    let root = tempdir("u64max");
+    let c = FakeClock::new();
+    let mut s = open(&root, &c);
+    let r = s.push(&batch(u64::MAX - 2, 3).b()).unwrap();
+    assert_eq!((r.acked, r.stored, r.gap), (u64::MAX, 3, true));
+    for first in [1, u64::MAX - 1, u64::MAX] {
+        let r = s.push(&batch(first, 1).b()).unwrap();
+        assert_eq!(
+            (r.acked, r.stored, r.duplicates),
+            (u64::MAX, 0, 1),
+            "{first}"
+        );
+    }
+    assert_eq!(s.streams()[STREAM_A].hwm, u64::MAX);
+    let root = tempdir("u64max-past");
+    let mut s = open(&root, &c);
+    let mut b = batch(u64::MAX, 1);
+    b.records.push(record(0));
+    assert_eq!(s.push(&b.b()).unwrap_err().kind, Kind::Other);
+    assert!(seqs(&root, "node-a").is_empty());
+    assert!(s.streams().is_empty());
+}
+
+/// A sealed day relabelled under another node, manifest and path both saying node-b while
+/// its records say node-a (content hash unchanged), is refused at restore, nothing changed.
+/// Go nisshi accepted it (validation P2, masu `check_sealed`).
+#[test]
+fn restore_refuses_relabelled_day() {
+    let root = tempdir("relabel");
+    let c = FakeClock::new();
+    let mut s = open(&root, &c);
+    s.push(&batch(1, 5).b()).unwrap();
+    c.set(day0() + DAY);
+    assert!(s.seal_past().1.is_empty());
+    drop(s);
+    fs::rename(root.join("node-a"), root.join("node-b")).unwrap();
+    let mp = root.join("node-b/2026-10-19.manifest.json");
+    let m = fs::read_to_string(&mp).unwrap();
+    fs::write(&mp, m.replace(r#""node":"node-a""#, r#""node":"node-b""#)).unwrap();
+    fs::remove_file(root.join("state.json")).unwrap();
+    let data = root.join("node-b/2026-10-19.ndjson.zst");
+    let before = (fs::read(&data).unwrap(), fs::read(&mp).unwrap());
+    let e = Store::open(&root, 0, c.clock()).err().unwrap();
+    assert!(e.contains("node-a"), "{e}");
+    assert_eq!((fs::read(&data).unwrap(), fs::read(&mp).unwrap()), before);
+    assert!(!root.join("state.json").exists());
+}
+
+/// A seal interrupted after its manifest is checked at open, not trusted: a data file that no
+/// longer matches its manifest stops the start (masu recovery).
+#[test]
+fn interrupted_seal_is_verified() {
+    let root = tempdir("sealverify");
+    let c = FakeClock::new();
+    let mut s = open(&root, &c);
+    s.push(&batch(1, 5).b()).unwrap();
+    c.set(day0() + DAY);
+    s.crash = Some(Box::new(|at| at == "seal-rename"));
+    assert_eq!(s.seal_past().1.len(), 1);
+    drop(s);
+    let data = data_path(&root, "node-a", "2026-10-19");
+    let good = fs::read(&data).unwrap();
+    let mut other = record(9).to_vec();
+    other.push(b'\n');
+    fs::write(&data, frame(&other)).unwrap();
+    let e = Store::open(&root, 0, c.clock()).err().unwrap();
+    assert!(e.contains("interrupted seal"), "{e}");
+    fs::write(&data, &good).unwrap();
+    let s = open(&root, &c);
+    assert!(!s.st.days.contains_key("node-a/2026-10-19"));
+}
+
+/// A stopped writer seals nothing and deletes nothing until a restart (masu).
+#[test]
+fn broken_writer_skips_maintenance() {
+    let root = tempdir("brokenseal");
+    let c = FakeClock::new();
+    let mut s = open(&root, &c);
+    s.push(&batch(1, 5).b()).unwrap();
+    s.crash = Some(Box::new(|at| at == "rename"));
+    assert!(s.push(&batch(6, 5).b()).is_err());
+    s.crash = None;
+    assert!(s.is_broken());
+    c.set(day0() + DAY);
+    let (sealed, errs) = s.seal_past();
+    assert!(
+        sealed.is_empty() && errs[0].contains("writer stopped"),
+        "{errs:?}"
+    );
+    assert!(s.retain(1).1.is_some_and(|e| e.contains("writer stopped")));
+    assert!(!manifest_path(&root, "node-a", "2026-10-19").exists());
 }

@@ -170,8 +170,9 @@ fn check(b: &[u8], record: bool) -> Result<Vec<(String, &[u8])>, String> {
         return Err("not-json".into());
     }
     let obj = json::members(b).ok_or("not-object")?;
-    for (i, (k, _)) in obj.iter().enumerate() {
-        if obj[..i].iter().any(|(o, _)| o == k) {
+    let mut seen = std::collections::HashSet::with_capacity(obj.len());
+    for (k, _) in &obj {
+        if !seen.insert(k.as_str()) {
             // Parsers disagree on which value wins.
             return Err(format!("duplicate-field:{k}"));
         }
@@ -248,6 +249,38 @@ mod tests {
             line(br#"{"v":1,"v":1}"#),
             "duplicate-field:v",
             "names compare after unescaping"
+        );
+    }
+
+    /// A flat object of many distinct members, near the record limit, is checked in linear
+    /// time (validation P1: the duplicate scan was quadratic).
+    #[test]
+    fn wide_object_is_linear() {
+        let mut b = String::from(
+            r#"{"v":1,"ts":"2026-10-19T08:14:03.512004117Z","level":"info","event":"q""#,
+        );
+        let mut i = 0;
+        while b.len() < MAX_RECORD_BYTES - 64 {
+            b.push_str(&format!(",\"k{i}\":0"));
+            i += 1;
+        }
+        b.push('}');
+        let t = std::time::Instant::now();
+        assert_eq!(line(b.as_bytes()), "line-too-large");
+        assert_eq!(
+            check(b.as_bytes(), true).err(),
+            Some("missing-field:node".into())
+        );
+        let dup = format!("{},\"k0\":1}}", &b[..b.len() - 1]);
+        assert_eq!(record(dup.as_bytes()), "duplicate-field:k0");
+        assert_eq!(
+            json::object_map(b.as_bytes()).unwrap().unwrap().len(),
+            i + 4
+        );
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
         );
     }
 }

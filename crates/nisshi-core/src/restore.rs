@@ -3,12 +3,13 @@
 //! in (ADR 0014), nisshi's own seq the highest `seq-gap` seq. Sealed days are checked against
 //! their manifests; an open day must end on a complete frame and stays open.
 
-use crate::seal::StreamRange;
+use crate::seal::{Manifest, StreamRange};
 use crate::store::{
     GAP_STREAM, Store, Stream, data_path, exists, ioerr, manifest_path, parse_envelope,
     read_dir_sorted, read_from, read_lines,
 };
 use std::collections::BTreeMap;
+use std::path::Path;
 
 type Ranges = BTreeMap<String, StreamRange>;
 
@@ -51,22 +52,12 @@ pub(crate) fn rebuild(s: &mut Store) -> Result<(), String> {
                     m.path.display()
                 ));
             }
-            let mut ranges = Ranges::new();
-            for r in m.streams.iter().flatten() {
-                ranges.insert(r.stream.clone(), r.clone());
-            }
             let data = data_path(&root, &node, day);
-            if exists(&data)? {
-                let mut got = Ranges::new();
-                let (sha, n) = read_lines(&data, true, scan_ranges(&mut got))
-                    .map_err(|e| format!("{}: {e}", data.display()))?;
-                if sha != m.content_sha256 || n as i64 != m.records || got != ranges {
-                    return Err(format!(
-                        "{}: data does not match its manifest",
-                        data.display()
-                    ));
-                }
-            }
+            let ranges = if exists(&data)? {
+                check_sealed(&m, &data)?
+            } else {
+                manifest_ranges(&m)
+            };
             add(s, &node, &ranges)?;
         }
         for (name, _) in read_dir_sorted(&dir)? {
@@ -87,7 +78,7 @@ pub(crate) fn rebuild(s: &mut Store) -> Result<(), String> {
             let b = std::fs::read(&path).map_err(|e| ioerr("open", &path, &e))?;
             whole_frames(&b).map_err(|e| format!("{}: {e}", path.display()))?;
             let mut ranges = Ranges::new();
-            read_from(&b[..], true, scan_ranges(&mut ranges))
+            read_from(&b[..], true, scan_ranges(&node, &mut ranges))
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             add(s, &node, &ranges)?;
             s.st.days.insert(format!("{node}/{day}"), b.len() as i64);
@@ -99,10 +90,41 @@ pub(crate) fn rebuild(s: &mut Store) -> Result<(), String> {
     Ok(())
 }
 
-/// Collects the seq range of each stream of the lines it is called on.
-pub(crate) fn scan_ranges(ranges: &mut Ranges) -> impl FnMut(&[u8]) -> Result<(), String> + '_ {
-    |line| {
+fn manifest_ranges(m: &Manifest) -> Ranges {
+    let mut ranges = Ranges::new();
+    for r in m.streams.iter().flatten() {
+        ranges.insert(r.stream.clone(), r.clone());
+    }
+    ranges
+}
+
+/// The stream ranges of a sealed day, after checking that its data file holds exactly what its
+/// manifest records, every record of the manifest's node: the node is not in the content hash,
+/// a day relabelled under another node is refused (masu `check_sealed`; Go nisshi did not check).
+pub(crate) fn check_sealed(m: &Manifest, data: &Path) -> Result<Ranges, String> {
+    let ranges = manifest_ranges(m);
+    let mut got = Ranges::new();
+    let (sha, n) = read_lines(data, true, scan_ranges(&m.node, &mut got))
+        .map_err(|e| format!("{}: {e}", data.display()))?;
+    if sha != m.content_sha256 || n as i64 != m.records || got != ranges {
+        return Err(format!(
+            "{}: data does not match its manifest",
+            data.display()
+        ));
+    }
+    Ok(ranges)
+}
+
+/// Collects the seq range of each stream of the lines it is called on, all of `node`.
+pub(crate) fn scan_ranges<'a>(
+    node: &'a str,
+    ranges: &'a mut Ranges,
+) -> impl FnMut(&[u8]) -> Result<(), String> + 'a {
+    move |line| {
         let e = parse_envelope(line)?;
+        if e.node != node {
+            return Err(format!("holds a record of node {:?}, not {node:?}", e.node));
+        }
         let seq = e.seq().map_err(|err| format!("seq: {err}"))?;
         ranges
             .entry(e.stream.clone())

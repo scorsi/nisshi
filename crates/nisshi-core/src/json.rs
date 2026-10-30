@@ -219,10 +219,14 @@ pub fn object_map(b: &[u8]) -> Result<Option<Members<'_>>, String> {
     };
     // Last one wins, at the position of the first.
     let mut out: Vec<(String, &[u8])> = Vec::with_capacity(ms.len());
+    let mut at = std::collections::HashMap::with_capacity(ms.len());
     for (k, v) in ms.drain(..) {
-        match out.iter_mut().find(|(o, _)| *o == k) {
-            Some(slot) => slot.1 = v,
-            None => out.push((k, v)),
+        match at.get(&k) {
+            Some(&i) => out[i] = (k, v),
+            None => {
+                at.insert(k.clone(), out.len());
+                out.push((k, v));
+            }
         }
     }
     Ok(Some(out))
