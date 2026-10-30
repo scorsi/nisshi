@@ -1,6 +1,0 @@
-# `nix develop -c buf generate`; checks.proto-generated fails when gen/ is stale.
-version: v2
-plugins:
-  - local: protoc-gen-go
-    out: .
-    opt: module=nisshi
