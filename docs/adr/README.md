@@ -21,3 +21,4 @@ Decision / Consequences. A decision is changed by a new ADR that supersedes the 
 | [0014](0014-stream-owner.md) | A stream belongs to the node that first pushed it |
 | [0015](0015-rust-and-dependencies.md) | Language: Rust, and the dependency register |
 | [0016](0016-binaries.md) | Three binaries: data CLI, server, query daemon |
+| [0017](0017-nisshi-query.md) | nisshi-query: records and counts over the query document (Proposed) |
